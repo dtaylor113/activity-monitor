@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OCMUI Activity Monitor</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: #0a0a0a;
+  color: #e5e7eb;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 14px;
+  padding: 12px 1vw;
+  width: 98vw;
+}
+h1 { font-size: 1.6em; margin-bottom: 4px; color: #fff; }
+h2 { font-size: 1.3em; margin: 28px 0 8px 0; color: #93c5fd; border-bottom: 1px solid #333; padding-bottom: 4px; }
+h3 { font-size: 1.1em; margin: 18px 0 6px 0; color: #a5b4fc; }
+.meta { color: #9ca3af; font-size: 0.85em; margin-bottom: 16px; }
+a { color: #60a5fa; text-decoration: none; }
+a:hover { text-decoration: underline; }
+.red { color: #ef4444; font-weight: 600; }
+.orange { color: #f59e0b; font-weight: 600; }
+
+table { width: 100%; border-collapse: collapse; font-size: 13px; margin: 8px 0 16px 0; }
+th, td { border: 1px solid #333; padding: 6px 10px; text-align: left; vertical-align: top; }
+th {
+  background: #1f2937; color: #d1d5db; font-weight: 600;
+  position: relative; cursor: pointer; user-select: none; white-space: nowrap;
+}
+th:hover { background: #374151; }
+th .sort-indicator { font-size: 10px; margin-left: 4px; opacity: 0.5; }
+th.sorted .sort-indicator { opacity: 1; }
+td { background: #111; }
+tr:hover td { background: #1a1a2e; }
+.nowrap { white-space: nowrap; }
+
+th .resize-handle { position: absolute; right: 0; top: 0; bottom: 0; width: 5px; cursor: col-resize; background: transparent; }
+th .resize-handle:hover, th .resize-handle.active { background: #60a5fa; }
+
+ul { margin: 4px 0 4px 20px; }
+li { margin: 3px 0; }
+p { margin: 6px 0; }
+.section-content { padding-left: 12px; }
+
+/* Expand toggle chevron */
+.expand-toggle {
+  display: inline-block; cursor: pointer; font-size: 22px;
+  margin-right: 6px; padding: 2px 6px; color: #6b7280;
+  transition: transform 0.15s; vertical-align: middle; border-radius: 3px;
+}
+.expand-toggle:hover { color: #60a5fa; background: #1f2937; }
+.expand-toggle.open { transform: rotate(90deg); color: #60a5fa; }
+.expand-toggle.no-data { opacity: 0.15; cursor: default; }
+.expand-toggle.no-data:hover { background: none; color: #6b7280; }
+
+/* Epic detail expandable rows */
+tr.epic-detail { display: none; }
+tr.epic-detail.open { display: table-row; }
+tr.epic-detail td { background: #0d0d1a; padding: 10px 14px 10px 48px; border-top: none; border-left: 3px solid #374151; }
+.detail-panel { font-size: 12px; line-height: 1.5; margin-left: 16px; }
+.detail-panel .detail-section { margin-bottom: 8px; }
+.detail-panel .detail-section:last-child { margin-bottom: 0; }
+.detail-label { font-weight: 600; color: #93c5fd; font-size: 11px; text-transform: uppercase; letter-spacing: 0.3px; margin-bottom: 2px; }
+.detail-panel ul { margin: 2px 0 2px 16px; font-size: 12px; }
+.detail-panel li { margin: 2px 0; color: #d1d5db; }
+.detail-change { color: #d1d5db; }
+.detail-change strong { color: #e5e7eb; }
+.mismatch-flag { color: #ef4444; font-weight: 600; }
+.child-comment { margin-left: 12px; color: #9ca3af; font-size: 11px; font-style: italic; }
+.child-group-label { margin: 8px 0 2px 0; font-size: 11px; font-weight: 600; color: #6366f1; text-transform: uppercase; letter-spacing: 0.5px; }
+.child-pr-info { margin: 4px 0 6px 12px; padding: 4px 8px; border-left: 2px solid #4b5563; font-size: 11px; }
+.child-pr-info .pr-badge { font-weight: 600; }
+.child-pr-info .pr-comment-list { margin-top: 3px; }
+.child-pr-info .pr-reviewer-list { margin: 3px 0 3px 4px; font-size: 11px; }
+.reviewer-line { display: inline-flex; flex-wrap: wrap; gap: 2px 6px; }
+.ai-text { color: #a5b4fc; font-style: italic; font-size: 11px; }
+.ai-text::before { content: '✦ '; opacity: 0.6; }
+.uber-ai { color: #e2e8f0; font-size: 12px; font-weight: 500; padding: 8px 12px; margin-bottom: 8px; border-left: 3px solid #a5b4fc; background: rgba(165, 180, 252, 0.06); border-radius: 0 4px 4px 0; line-height: 1.5; }
+.uber-ai::before { content: '⚡ '; }
+.detail-toggle-bar { margin-bottom: 10px; }
+.detail-expand-btn { background: rgba(165, 180, 252, 0.12); border: 1px solid rgba(165, 180, 252, 0.3); color: #a5b4fc; font-size: 11px; padding: 3px 10px; border-radius: 3px; cursor: pointer; }
+.detail-expand-btn:hover { background: rgba(165, 180, 252, 0.2); }
+.section-collapsible { display: none; }
+.section-collapsible.expanded { display: block; }
+
+/* PR comment sub-rows */
+tr.pr-comments { display: none; }
+tr.pr-comments.visible td { display: table-cell; }
+tr.pr-comments.visible { display: table-row; }
+tr.pr-comments td { background: #0d0d1a; border-top: none; padding: 3px 10px 6px 10px; font-size: 11px; color: #9ca3af; line-height: 1.4; }
+.pr-comments-toggle { background: rgba(165, 180, 252, 0.12); border: 1px solid rgba(165, 180, 252, 0.3); color: #a5b4fc; font-size: 11px; padding: 3px 10px; border-radius: 3px; cursor: pointer; margin-left: 10px; vertical-align: middle; }
+.pr-comments-toggle:hover { background: rgba(165, 180, 252, 0.2); }
+.pr-comment-line { padding: 2px 0; }
+.comment-label { color: #60a5fa; font-weight: 600; margin-right: 4px; }
+
+.filter-bar { margin: 8px 0; }
+.filter-bar input { background: #1a1a2e; border: 1px solid #333; color: #e5e7eb; padding: 6px 10px; border-radius: 4px; font-size: 13px; width: 320px; }
+.filter-bar input::placeholder { color: #6b7280; }
+.filter-bar input:focus { outline: none; border-color: #60a5fa; }
+.filter-bar select { background: #1a1a2e; border: 1px solid #333; color: #e5e7eb; padding: 6px 10px; border-radius: 4px; font-size: 13px; margin-left: 8px; }
+.filter-bar select:focus { outline: none; border-color: #60a5fa; }
+.filter-bar button { margin-left: 10px; background: #1f2937; border: 1px solid #333; color: #e5e7eb; padding: 5px 12px; border-radius: 4px; font-size: 13px; cursor: pointer; }
+.filter-bar button:hover { background: #374151; }
+
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script src="activity-data.js"></script>
+<script>
+const D = window.ACTIVITY_DATA;
+const JIRA = 'https://redhat.atlassian.net/browse/';
+const GH = 'https://github.com/RedHatInsights/uhc-portal/pull/';
+
+function jiraLink(key) { return `<a href="${JIRA}${key}">${key}</a>`; }
+function ghLink(n) { return `<a href="${GH}${n}">#${n}</a>`; }
+function esc(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+function dateClass(targetEnd, parentTargetEnd) {
+  if (!targetEnd) return '';
+  const today = new Date(); today.setHours(0,0,0,0);
+  const te = new Date(targetEnd + 'T00:00:00');
+  const diff = (te - today) / 86400000;
+  if (diff < 0) return 'red';
+  if (parentTargetEnd && targetEnd > parentTargetEnd) return 'red';
+  if (diff <= 10) return 'orange';
+  return '';
+}
+function parentDateClass(targetEnd, parentTargetEnd) {
+  if (!targetEnd || !parentTargetEnd) return '';
+  if (targetEnd > parentTargetEnd) return 'red';
+  return '';
+}
+
+
+function renderEpicsTable() {
+  let html = `<h3>Active Epics (In Progress + Review + Refinement + Backlog)</h3>`;
+  html += `<div class="filter-bar"><input type="text" id="epic-filter" placeholder="Filter by summary..." oninput="applyFilters()"><select id="assignee-filter" onchange="applyFilters()"><option value="">All Assignees</option></select><select id="status-filter" onchange="applyFilters()"><option value="">All Statuses</option></select><button id="expand-all-btn" onclick="toggleExpandAll()">Expand Active Epics</button></div>`;
+  html += `<table id="epics-table"><thead><tr>`;
+  ['Key','Summary','Assignee','Status','Target End','Parent Target End','Marketing Impact Notes','Parent'].forEach(h => {
+    html += `<th>${h}<span class="sort-indicator">⇅</span><div class="resize-handle"></div></th>`;
+  });
+  html += `</tr></thead><tbody>`;
+
+  D.epics.forEach((e, idx) => {
+    const hasComments = e.comments && e.comments.length > 0;
+    const hasChildren = D.epic_children[e.key] && D.epic_children[e.key].children.length > 0;
+    const childrenQueried = D.epic_children.hasOwnProperty(e.key);
+    const parentKey = e.parent_key || null;
+    const hasParentComments = parentKey && D.parent_comments[parentKey] && D.parent_comments[parentKey].length > 0;
+    const hasSiblings = parentKey && D.siblings && D.siblings[e.key] && D.siblings[e.key].length > 0;
+    const hasDetail = hasComments || hasChildren || childrenQueried || hasParentComments || hasSiblings;
+    const toggleClass = hasDetail ? 'expand-toggle' : 'expand-toggle no-data';
+
+    const teCls = dateClass(e.target_end, e.parent_target_end);
+    const pteCls = parentDateClass(e.target_end, e.parent_target_end);
+
+    html += `<tr data-epic-id="${idx}">`;
+    html += `<td class="nowrap"><span class="${toggleClass}">&#9656;</span>${jiraLink(e.key)}</td>`;
+    html += `<td>${esc(e.summary)}</td>`;
+    html += `<td>${esc(e.assignee)}</td>`;
+    html += `<td>${esc(e.status)}</td>`;
+    html += `<td class="nowrap ${teCls}">${e.target_end || '—'}</td>`;
+    html += `<td class="nowrap ${pteCls}">${e.parent_target_end || '—'}</td>`;
+    html += `<td>${esc(e.marketing_notes)}</td>`;
+    html += `<td class="nowrap">${e.parent_key ? jiraLink(e.parent_key)+' ('+esc(e.parent_summary)+')' : '—'}</td>`;
+    html += `</tr>`;
+
+    if (hasDetail) {
+      html += `<tr class="epic-detail" data-epic-id="${idx}"><td colspan="8"><div class="detail-panel">`;
+      if (e.uber_ai) html += `<div class="uber-ai">${esc(e.uber_ai)}</div>`;
+      html += `<div class="detail-toggle-bar"><button class="detail-expand-btn" data-panel-id="panel-${idx}">Show Details</button></div>`;
+
+      if (hasComments) {
+        html += `<div class="detail-section"><div class="detail-label">Latest Comments</div>`;
+        if (e.comments_ai) html += `<div class="ai-text">${esc(e.comments_ai)}</div>`;
+        html += `<div class="section-collapsible" data-panel-group="panel-${idx}"><ul>`;
+        e.comments.forEach(c => {
+          html += `<li class="detail-change">${esc(c.author)} (${c.created.slice(5)}): "${esc(c.body)}"</li>`;
+        });
+        html += `</ul></div></div>`;
+      }
+
+      if (hasChildren) {
+        const ch = D.epic_children[e.key];
+        const qeRe = /E2E Automation|Post-merge testing|CI Automation/i;
+        const ffRe = /feature flag/i;
+        const groups = {dev: [], qe: [], ff: []};
+        ch.children.forEach(child => {
+          if (qeRe.test(child.summary)) groups.qe.push(child);
+          else if (ffRe.test(child.summary)) groups.ff.push(child);
+          else groups.dev.push(child);
+        });
+        html += `<div class="detail-section"><div class="detail-label">Children (${ch.total_open} open)</div>`;
+        if (ch.ai_summary) html += `<div class="ai-text">${esc(ch.ai_summary)}</div>`;
+        html += `<div class="section-collapsible" data-panel-group="panel-${idx}">`;
+        const renderChildList = (children) => {
+          children.forEach(child => {
+            html += `<li>${jiraLink(child.key)} <span style="color:#9ca3af">(${esc(child.status)})</span> — ${esc(child.summary)} — <em>${esc(child.assignee)}</em>`;
+            if (child.latest_comment) {
+              html += `<div class="child-comment">→ ${esc(child.latest_comment.author)} (${child.latest_comment.created.slice(5)}): "${esc(child.latest_comment.body)}"</div>`;
+            }
+            const prData = D.child_pr_status && D.child_pr_status[child.key];
+            if (prData) {
+              html += `<div class="child-pr-info">`;
+              html += `<span class="pr-badge">${ghLink(prData.pr_number)} ${esc(prData.pr_title)}</span> `;
+              html += `<span style="color:#9ca3af">by ${esc(prData.pr_author)}</span> `;
+              if (prData.checks) html += renderChecksBadge(prData.checks) + ' ';
+              if (prData.mergeable_state) html += renderMergeStatus(prData.mergeable_state) + ' ';
+              if (prData.reviewers && prData.reviewers.length) {
+                html += `<div class="pr-reviewer-list">${renderReviewers(prData.reviewers)}</div>`;
+              } else if (prData.approvals === 0 && prData.changes_requested === 0) {
+                html += `<span style="color:#6b7280;">no reviews yet</span> `;
+              }
+              if (prData.ai_summary || prData.what) html += `<div class="ai-text">${esc(prData.ai_summary || prData.what)}</div>`;
+              if (prData.comments && prData.comments.length) {
+                html += `<div class="pr-comment-list">`;
+                prData.comments.forEach(c => {
+                  html += `<div class="child-comment">→ ${esc(c.user)} (${c.created_at.slice(5)}): "${esc(c.body)}"</div>`;
+                });
+                html += `</div>`;
+              }
+              html += `</div>`;
+            }
+            html += `</li>`;
+          });
+        };
+        if (groups.dev.length) {
+          html += `<div class="child-group-label">Development</div><ul>`;
+          renderChildList(groups.dev);
+          html += `</ul>`;
+        }
+        if (groups.qe.length) {
+          html += `<div class="child-group-label">QE</div><ul>`;
+          renderChildList(groups.qe);
+          html += `</ul>`;
+        }
+        if (groups.ff.length) {
+          html += `<div class="child-group-label">Feature Flag</div><ul>`;
+          renderChildList(groups.ff);
+          html += `</ul>`;
+        }
+        html += `</div></div>`;
+      } else if (childrenQueried && !hasChildren) {
+        html += `<div class="detail-section"><div class="detail-label">Children</div><div style="color:#6b7280;font-size:12px;">All children closed — no open stories remaining.</div></div>`;
+      }
+
+      if (hasParentComments) {
+        const parentAi = D.parent_comments_ai && D.parent_comments_ai[parentKey];
+        html += `<div class="detail-section"><div class="detail-label">Parent Comments (${jiraLink(parentKey)})</div>`;
+        if (parentAi) html += `<div class="ai-text">${esc(parentAi)}</div>`;
+        html += `<div class="section-collapsible" data-panel-group="panel-${idx}"><ul>`;
+        D.parent_comments[parentKey].forEach(c => {
+          html += `<li>${esc(c.author)} (${c.created.slice(5)}): "${esc(c.body)}"</li>`;
+        });
+        html += `</ul></div></div>`;
+      }
+
+      if (hasSiblings) {
+        const sibs = D.siblings[e.key];
+        const sibsAi = D.siblings_ai && D.siblings_ai[e.key];
+        html += `<div class="detail-section"><div class="detail-label">Siblings (${sibs.length} open)</div>`;
+        if (sibsAi) html += `<div class="ai-text">${esc(sibsAi)}</div>`;
+        html += `<div class="section-collapsible" data-panel-group="panel-${idx}"><ul>`;
+        sibs.forEach(s => {
+          html += `<li>${jiraLink(s.key)} <span style="color:#9ca3af">(${esc(s.status)})</span> — ${esc(s.summary)} — <em>${esc(s.assignee)}</em>`;
+          if (s.latest_comment) {
+            html += `<div class="child-comment">→ ${esc(s.latest_comment.author)} (${s.latest_comment.created.slice(5)}): "${esc(s.latest_comment.body)}"</div>`;
+          }
+          html += `</li>`;
+        });
+        html += `</ul></div></div>`;
+      }
+
+      html += `</div></td></tr>`;
+    }
+  });
+
+  html += `</tbody></table>`;
+  html += `<div style="font-size:11px;color:#9ca3af;margin:4px 0 16px 0;"><span class="red">&#9632;</span> Past due or mismatched with parent&nbsp;&nbsp;<span class="orange">&#9632;</span> Within 10 days of target end&nbsp;&nbsp;<span style="color:#6b7280;">&#9656;</span> Click chevron to expand epic details</div>`;
+  return html;
+}
+
+function renderPRs() {
+  const myUser = D.meta.github_user || 'dtaylor113';
+  const myPRs = D.prs.filter(pr => pr.author === myUser);
+  const reviewingPRs = D.prs.filter(pr => pr.author !== myUser).sort((a, b) => (a.updated || '').localeCompare(b.updated || ''));
+
+  let html = '';
+
+  if (myPRs.length) {
+    html += `<h3>My PRs <button class="pr-comments-toggle" data-table="my-prs-table">Show Comments</button></h3>`;
+    html += renderPRTable(myPRs, 'my-prs-table');
+  }
+
+  if (reviewingPRs.length) {
+    html += `<h3>PRs I'm Reviewing <button class="pr-comments-toggle" data-table="reviewing-prs-table">Show Comments</button></h3>`;
+    html += renderPRTable(reviewingPRs, 'reviewing-prs-table');
+  }
+
+  if (!myPRs.length && !reviewingPRs.length) {
+    html += `<h3>PRs Needing My Attention</h3><div style="color:#6b7280;">No open PRs needing attention.</div>`;
+  }
+
+  return html;
+}
+
+function renderPRTable(prs, tableId) {
+  let html = `<table id="${tableId}"><thead><tr>`;
+  ['PR','Title','Author','Reviewers','Checks','AI Summary','Updated'].forEach(h => {
+    html += `<th>${h}<span class="sort-indicator">⇅</span><div class="resize-handle"></div></th>`;
+  });
+  html += `</tr></thead><tbody>`;
+  prs.forEach(pr => {
+    const st = (D.pr_status && D.pr_status[pr.number]) || {};
+    const reviewHtml = renderReviewers(st.reviewers);
+    const checksHtml = renderChecksBadge(st.checks || 'unknown');
+    const mergeHtml = renderMergeStatus(st.mergeable_state || '');
+    const statusHtml = mergeHtml ? checksHtml + '<br>' + mergeHtml : checksHtml;
+    html += `<tr><td class="nowrap">${ghLink(pr.number)}</td><td>${esc(pr.title)}</td><td>${esc(pr.author)}</td><td>${reviewHtml}</td><td class="nowrap">${statusHtml}</td><td class="ai-text">${esc(pr.ai_summary || pr.what || '')}</td><td>${esc(pr.updated)}</td></tr>`;
+    const comments = (pr.comments || []).slice().sort((a, b) => (b.when || '').localeCompare(a.when || '')).slice(0, 4);
+    html += `<tr class="pr-comments"><td></td><td colspan="6">`;
+    comments.forEach(c => { html += `<div class="pr-comment-line"><span class="comment-label">${esc(c.who)} (${esc(c.when)}):</span> "${esc(c.body)}"</div>`; });
+    html += `</td></tr>`;
+  });
+  html += `</tbody></table>`;
+  return html;
+}
+
+function renderReviewers(reviewers) {
+  if (!reviewers || !reviewers.length) return `<span style="color:#6b7280;">—</span>`;
+  const stateMap = {
+    approved: {icon: '✓', color: '#22c55e'},
+    changes_requested: {icon: '✗', color: '#ef4444'},
+    commented: {icon: '💬', color: '#f59e0b'},
+    pending: {icon: '⏳', color: '#6b7280'}
+  };
+  return `<span class="reviewer-line">` + reviewers.map(r => {
+    const s = stateMap[r.state] || stateMap.pending;
+    return `<span style="color:${s.color};white-space:nowrap;" title="${r.state}">${s.icon} ${esc(r.user)}</span>`;
+  }).join(' &nbsp;') + `</span>`;
+}
+
+function renderChecksBadge(status) {
+  if (status === 'passing') return `<span style="color:#22c55e;">● passing</span>`;
+  if (status === 'failing') return `<span style="color:#ef4444;">● failing</span>`;
+  if (status === 'pending') return `<span style="color:#f59e0b;">● pending</span>`;
+  return `<span style="color:#6b7280;">—</span>`;
+}
+function renderMergeStatus(state) {
+  if (state === 'clean') return `<span style="color:#22c55e;" title="Ready to merge">✓ mergeable</span>`;
+  if (state === 'blocked') return `<span style="color:#f59e0b;" title="Merge blocked (branch protection rules)">⊘ blocked</span>`;
+  if (state === 'dirty') return `<span style="color:#ef4444;" title="Merge conflicts">⚠ conflicts</span>`;
+  if (state === 'unstable') return `<span style="color:#f59e0b;" title="Checks failing but mergeable">● unstable</span>`;
+  return '';
+}
+
+function renderPage() {
+  const ts = D.meta.last_checked ? new Date(D.meta.last_checked).toLocaleString('en-US', {weekday:'long',year:'numeric',month:'long',day:'numeric',hour:'numeric',minute:'2-digit',timeZoneName:'short'}) : '';
+  let html = `<h1>Activity Monitor for Dave Taylor</h1><div class="meta">Last checked: ${ts}</div>`;
+  html += `<h2>Jira</h2><div class="section-content">`;
+  html += renderEpicsTable();
+  html += `</div>`;
+  html += `<h2>GitHub</h2><div class="section-content">`;
+  html += renderPRs();
+  html += `</div>`;
+  document.getElementById('app').innerHTML = html;
+  initInteractions();
+}
+
+function initInteractions() {
+  // Expand/collapse toggles
+  document.querySelectorAll('.expand-toggle:not(.no-data)').forEach(toggle => {
+    toggle.addEventListener('click', e => {
+      e.stopPropagation();
+      const row = toggle.closest('tr');
+      const epicId = row.getAttribute('data-epic-id');
+      const detailRow = document.querySelector('tr.epic-detail[data-epic-id="' + epicId + '"]');
+      if (detailRow) {
+        toggle.classList.toggle('open');
+        detailRow.classList.toggle('open');
+        detailRow.style.display = detailRow.classList.contains('open') ? '' : 'none';
+      }
+    });
+  });
+
+  // PR comments show/hide buttons
+  document.querySelectorAll('.pr-comments-toggle').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const tableId = btn.getAttribute('data-table');
+      const table = document.getElementById(tableId);
+      if (!table) return;
+      const commentRows = table.querySelectorAll('tr.pr-comments');
+      const anyVisible = Array.from(commentRows).some(r => r.classList.contains('visible'));
+      commentRows.forEach(r => r.classList.toggle('visible', !anyVisible));
+      btn.textContent = anyVisible ? 'Show Comments' : 'Hide Comments';
+    });
+  });
+
+  // Detail section expand/collapse buttons
+  document.querySelectorAll('.detail-expand-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const panelId = btn.getAttribute('data-panel-id');
+      const sections = document.querySelectorAll(`.section-collapsible[data-panel-group="${panelId}"]`);
+      const anyExpanded = Array.from(sections).some(s => s.classList.contains('expanded'));
+      sections.forEach(s => s.classList.toggle('expanded', !anyExpanded));
+      btn.textContent = anyExpanded ? 'Show Details' : 'Hide Details';
+    });
+  });
+
+  // Table sorting
+  document.querySelectorAll('table').forEach(table => {
+    const state = { col: -1, asc: true };
+    table.querySelectorAll('th').forEach((th, idx) => {
+      th.addEventListener('click', e => {
+        if (e.target.classList.contains('resize-handle')) return;
+        if (state.col === idx) state.asc = !state.asc;
+        else { state.col = idx; state.asc = true; }
+        sortTable(table, idx, state.asc);
+      });
+    });
+  });
+
+  // Initial sort: epics by Target End asc
+  const epicsTable = document.getElementById('epics-table');
+  if (epicsTable) sortTable(epicsTable, 4, true);
+
+  // Populate dropdowns
+  const assigneeSelect = document.getElementById('assignee-filter');
+  const statusSelect = document.getElementById('status-filter');
+  if (epicsTable && assigneeSelect && statusSelect) {
+    const assignees = new Set(), statuses = new Set();
+    epicsTable.querySelectorAll('tbody tr:not(.epic-detail)').forEach(row => {
+      if (!row.cells[2]) return;
+      const n = row.cells[2].textContent.trim();
+      if (n && n !== '—') assignees.add(n);
+      const s = row.cells[3] && row.cells[3].textContent.trim();
+      if (s) statuses.add(s);
+    });
+    Array.from(assignees).sort().forEach(n => { const o = document.createElement('option'); o.value = n; o.textContent = n; assigneeSelect.appendChild(o); });
+    ['In Progress','Review','Refinement','Backlog'].forEach(s => { if (statuses.has(s)) { const o = document.createElement('option'); o.value = s; o.textContent = s; statusSelect.appendChild(o); }});
+  }
+
+  // Resizable columns
+  document.querySelectorAll('.resize-handle').forEach(handle => {
+    handle.addEventListener('mousedown', e => {
+      const th = handle.parentElement;
+      const startX = e.pageX, startWidth = th.offsetWidth;
+      handle.classList.add('active');
+      const onMove = ev => { th.style.width = (startWidth + ev.pageX - startX) + 'px'; th.style.minWidth = th.style.width; };
+      const onUp = () => { handle.classList.remove('active'); document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); };
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+      e.preventDefault();
+    });
+  });
+}
+
+function sortTable(table, colIdx, asc) {
+  const headers = table.querySelectorAll('th');
+  headers.forEach(h => { h.classList.remove('sorted'); h.querySelector('.sort-indicator').textContent = '⇅'; });
+  headers[colIdx].classList.add('sorted');
+  headers[colIdx].querySelector('.sort-indicator').textContent = asc ? '▲' : '▼';
+  const tbody = table.querySelector('tbody');
+  const isEpics = (table.id === 'epics-table');
+  const rows = Array.from(tbody.querySelectorAll('tr:not(.epic-detail):not(.pr-comments)'));
+  rows.sort((a, b) => {
+    let aV = a.cells[colIdx].textContent.trim(), bV = b.cells[colIdx].textContent.trim();
+    if (aV === '—' || aV === '') aV = 'zzz';
+    if (bV === '—' || bV === '') bV = 'zzz';
+    return asc ? aV.localeCompare(bV) : bV.localeCompare(aV);
+  });
+  rows.forEach(row => {
+    tbody.appendChild(row);
+    if (isEpics) {
+      const id = row.getAttribute('data-epic-id');
+      if (id) { const d = tbody.querySelector('tr.epic-detail[data-epic-id="'+id+'"]'); if (d) tbody.appendChild(d); }
+    } else {
+      const nx = row.nextElementSibling;
+      if (nx && nx.classList.contains('pr-comments')) tbody.appendChild(nx);
+    }
+  });
+}
+
+function toggleExpandAll() {
+  const btn = document.getElementById('expand-all-btn');
+  const epicsBody = document.querySelector('#epics-table tbody');
+  const targets = [];
+  epicsBody.querySelectorAll('tr:not(.epic-detail)').forEach(row => {
+    if (!row.cells[3] || row.style.display === 'none') return;
+    const status = row.cells[3].textContent.trim();
+    if (status === 'In Progress' || status === 'Review') {
+      const id = row.getAttribute('data-epic-id');
+      const toggle = row.querySelector('.expand-toggle:not(.no-data)');
+      const detail = id ? epicsBody.querySelector('tr.epic-detail[data-epic-id="'+id+'"]') : null;
+      if (toggle && detail) targets.push({toggle, detail});
+    }
+  });
+  const anyOpen = targets.some(r => r.detail.classList.contains('open'));
+  targets.forEach(r => {
+    r.detail.classList[anyOpen?'remove':'add']('open');
+    r.toggle.classList[anyOpen?'remove':'add']('open');
+    r.detail.style.display = anyOpen ? 'none' : '';
+  });
+  btn.textContent = anyOpen ? 'Expand Active Epics' : 'Collapse Active Epics';
+}
+
+function applyFilters() {
+  const query = document.getElementById('epic-filter').value.toLowerCase();
+  const assignee = document.getElementById('assignee-filter').value;
+  const status = document.getElementById('status-filter').value;
+  const tbody = document.querySelector('#epics-table tbody');
+  tbody.querySelectorAll('tr:not(.epic-detail)').forEach(row => {
+    if (!row.cells[1]) return;
+    const s = row.cells[1].textContent.toLowerCase();
+    const a = row.cells[2].textContent.trim();
+    const st = row.cells[3].textContent.trim();
+    const vis = (!query || s.includes(query)) && (!assignee || a === assignee) && (!status || st === status);
+    row.style.display = vis ? '' : 'none';
+    const id = row.getAttribute('data-epic-id');
+    if (id) { const d = tbody.querySelector('tr.epic-detail[data-epic-id="'+id+'"]'); if (d) d.style.display = vis && d.classList.contains('open') ? '' : 'none'; }
+  });
+}
+
+renderPage();
+</script>
+</body>
+</html>
