@@ -6,33 +6,6 @@ A Cursor AI skill that generates a consolidated status report of your GitHub PR 
 - **Jira Epics** — all your active epics with child stories, parent alignment, sibling epics, target dates, and urgency indicators
 - **AI Summaries** — synthesized insights including "ball in court" tracking, age indicators, and cross-section uber summaries per epic
 
-## Screenshots
-
-### Epics Table — Collapsed View
-The main table shows all active epics with sortable columns, filters by assignee/status, and color-coded target dates.
-
-![Epics collapsed](screenshots/epics_1.png)
-
-### Epics Table — Expanded with AI Summary
-Click a row to expand it. The uber AI summary and section-level AI summaries are immediately visible.
-
-![Epics expanded with AI](screenshots/epics_2.png)
-
-### Epics Table — Full Details
-Click "Show Details" to reveal raw comments, children grouped by category (Development / QE / Feature Flag), parent comments, and sibling epics with their latest activity.
-
-![Epics full details](screenshots/epics_3.png)
-
-### GitHub PRs — Collapsed
-Split into "My PRs" and "PRs I'm Reviewing" with reviewer status, CI checks, merge state, and AI summaries.
-
-![GitHub PRs collapsed](screenshots/github_1.png)
-
-### GitHub PRs — Comments Expanded
-Click "Show Comments" to see the most recent unresolved comments per PR.
-
-![GitHub PRs with comments](screenshots/github_2.png)
-
 ## Prerequisites
 
 | Requirement | Details |
