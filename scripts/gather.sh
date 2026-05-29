@@ -5,10 +5,32 @@
 # Usage:
 #   gather.sh [DAYS]              # Lookback N days (default: 3)
 #   gather.sh --since "ISO_DATE"  # Since a specific timestamp
+#
+# Required environment variables (set via ocmui-tokens.sh):
+#   GITHUB_USER    - Your GitHub username (e.g., dtaylor113)
+#   GITHUB_REPO    - The repo to monitor (e.g., RedHatInsights/uhc-portal)
+#   JIRA_EMAIL     - Your Jira/Atlassian email
+#   JIRA_TOKEN     - Jira API token
+#   JIRA_INSTANCE  - Jira hostname (e.g., ${JIRA_INSTANCE})
+#   JIRA_PROJECT   - Jira project key (e.g., OCMUI)
 set -euo pipefail
 
-GITHUB_USER="dtaylor113"
-REPO="RedHatInsights/uhc-portal"
+# --- Validate required environment variables ---
+MISSING=()
+[[ -z "${GITHUB_USER:-}" ]] && MISSING+=("GITHUB_USER")
+[[ -z "${GITHUB_REPO:-}" ]] && MISSING+=("GITHUB_REPO")
+[[ -z "${JIRA_EMAIL:-}" ]] && MISSING+=("JIRA_EMAIL")
+[[ -z "${JIRA_TOKEN:-}" ]] && MISSING+=("JIRA_TOKEN")
+[[ -z "${JIRA_INSTANCE:-}" ]] && MISSING+=("JIRA_INSTANCE")
+[[ -z "${JIRA_PROJECT:-}" ]] && MISSING+=("JIRA_PROJECT")
+
+if [[ ${#MISSING[@]} -gt 0 ]]; then
+  echo "ERROR: Missing required environment variables: ${MISSING[*]}" >&2
+  echo "Set these in your ocmui-tokens.sh and source it. See README.md for setup." >&2
+  exit 1
+fi
+
+REPO="$GITHUB_REPO"
 
 # Parse arguments
 if [[ "${1:-}" == "--since" && -n "${2:-}" ]]; then
@@ -23,13 +45,6 @@ else
   SINCE_DATE=$(date -v-${LOOKBACK_DAYS}d +%Y-%m-%d 2>/dev/null || date -d "-${LOOKBACK_DAYS} days" +%Y-%m-%d)
 fi
 
-# Load Jira tokens from dashboard .env if not already set
-# (Don't override GITHUB_TOKEN — gh CLI uses its own auth)
-DASHBOARD_ENV="/Users/dtaylor/repos/work/ocmui-team-dashboard/.env"
-if [[ -z "${JIRA_TOKEN:-}" && -f "$DASHBOARD_ENV" ]]; then
-  export $(grep -E '^(JIRA_EMAIL|JIRA_TOKEN)=' "$DASHBOARD_ENV" | xargs)
-fi
-
 echo "=== ACTIVITY MONITOR (since $SINCE_DATE, ${LOOKBACK_DAYS}d lookback) ==="
 echo ""
 
@@ -38,9 +53,9 @@ echo ""
 # Uses 'comment' field to get comments inline (1 API call instead of N+1)
 echo "### SECTION: ALL_EPICS"
 curl -s -u "$JIRA_EMAIL:$JIRA_TOKEN" \
-  "https://redhat.atlassian.net/rest/api/3/search/jql" \
+  "https://${JIRA_INSTANCE}/rest/api/3/search/jql" \
   -G \
-  --data-urlencode "jql=project = OCMUI AND issuetype = Epic AND status in (\"In Progress\", Review, Refinement, Backlog) ORDER BY \"Target end\" ASC, priority DESC" \
+  --data-urlencode "jql=project = ${JIRA_PROJECT} AND issuetype = Epic AND status in (\"In Progress\", Review, Refinement, Backlog) ORDER BY \"Target end\" ASC, priority DESC" \
   --data-urlencode "maxResults=40" \
   --data-urlencode "fields=key,summary,status,assignee,priority,updated,customfield_10023,customfield_10542,parent,comment" \
   --data-urlencode "expand=names" | python3 -c "
@@ -138,9 +153,9 @@ echo ""
 # Fetches ALL active OCMUI epics (not just recently updated) to check parent alignment
 echo "### SECTION: PARENT_EPIC_STATUS"
 curl -s -u "$JIRA_EMAIL:$JIRA_TOKEN" \
-  "https://redhat.atlassian.net/rest/api/3/search/jql" \
+  "https://${JIRA_INSTANCE}/rest/api/3/search/jql" \
   -G \
-  --data-urlencode "jql=project = OCMUI AND issuetype = Epic AND status in (\"In Progress\", Review, Refinement, Backlog) ORDER BY \"Target end\" ASC" \
+  --data-urlencode "jql=project = ${JIRA_PROJECT} AND issuetype = Epic AND status in (\"In Progress\", Review, Refinement, Backlog) ORDER BY \"Target end\" ASC" \
   --data-urlencode "maxResults=30" \
   --data-urlencode "fields=key,summary,status,assignee,customfield_10023,parent,customfield_10542" \
   --data-urlencode "expand=names" | python3 -c "
@@ -206,7 +221,7 @@ if parent_keys:
         'fields': 'key,summary,status,customfield_10023,description,updated',
         'expand': 'changelog'
     })
-    url = f'https://redhat.atlassian.net/rest/api/3/search/jql?{params}'
+    url = f'https://${JIRA_INSTANCE}/rest/api/3/search/jql?{params}'
     req = urllib.request.Request(url, headers={
         'Authorization': f'Basic {auth}',
         'Accept': 'application/json'
@@ -264,7 +279,7 @@ if parent_keys:
 # Fetch last 8 comments for all parents
 for pkey in list(parent_data.keys()):
     try:
-        comment_url = f'https://redhat.atlassian.net/rest/api/3/issue/{pkey}/comment?orderBy=-created&maxResults=8'
+        comment_url = f'https://${JIRA_INSTANCE}/rest/api/3/issue/{pkey}/comment?orderBy=-created&maxResults=8'
         req = urllib.request.Request(comment_url, headers={
             'Authorization': f'Basic {auth}',
             'Accept': 'application/json'
@@ -330,9 +345,9 @@ echo ""
 # --- Section 1c: Open child stories for each active epic ---
 echo "### SECTION: EPIC_CHILDREN"
 curl -s -u "$JIRA_EMAIL:$JIRA_TOKEN" \
-  "https://redhat.atlassian.net/rest/api/3/search/jql" \
+  "https://${JIRA_INSTANCE}/rest/api/3/search/jql" \
   -G \
-  --data-urlencode "jql=project = OCMUI AND issuetype = Epic AND status in (\"In Progress\", Review, Refinement, Backlog) ORDER BY \"Target end\" ASC" \
+  --data-urlencode "jql=project = ${JIRA_PROJECT} AND issuetype = Epic AND status in (\"In Progress\", Review, Refinement, Backlog) ORDER BY \"Target end\" ASC" \
   --data-urlencode "maxResults=30" \
   --data-urlencode "fields=key" | python3 -c "
 import sys, json, urllib.request, urllib.parse, base64, os
@@ -355,7 +370,7 @@ for epic_key in epic_keys:
         'maxResults': 15,
         'fields': 'key,summary,status,assignee,issuetype,updated,comment'
     })
-    url = f'https://redhat.atlassian.net/rest/api/3/search/jql?{params}'
+    url = f'https://${JIRA_INSTANCE}/rest/api/3/search/jql?{params}'
     req = urllib.request.Request(url, headers={
         'Authorization': f'Basic {auth}',
         'Accept': 'application/json'
@@ -419,9 +434,9 @@ echo "### SECTION: CHILD_PR_STATUS"
 # Collect child ticket keys in Code Review or Review from the EPIC_CHILDREN output,
 # then look up their corresponding GitHub PRs
 curl -s -u "$JIRA_EMAIL:$JIRA_TOKEN" \
-  "https://redhat.atlassian.net/rest/api/3/search/jql" \
+  "https://${JIRA_INSTANCE}/rest/api/3/search/jql" \
   -G \
-  --data-urlencode "jql=project = OCMUI AND issuetype != Epic AND status in (\"Code Review\", Review) AND issueFunction in linkedIssuesOf(\"project = OCMUI AND issuetype = Epic AND status in ('In Progress', Review, Refinement, Backlog)\", \"is child of\") ORDER BY updated DESC" \
+  --data-urlencode "jql=project = ${JIRA_PROJECT} AND issuetype != Epic AND status in (\"Code Review\", Review) AND issueFunction in linkedIssuesOf(\"project = ${JIRA_PROJECT} AND issuetype = Epic AND status in ('In Progress', Review, Refinement, Backlog)\", \"is child of\") ORDER BY updated DESC" \
   --data-urlencode "maxResults=30" \
   --data-urlencode "fields=key,summary,status" 2>/dev/null | python3 -c "
 import sys, json, subprocess, os
@@ -443,11 +458,11 @@ if not child_keys:
     jira_token = os.environ.get('JIRA_TOKEN', '')
     auth = base64.b64encode(f'{jira_email}:{jira_token}'.encode()).decode()
     params = urllib.parse.urlencode({
-        'jql': 'project = OCMUI AND issuetype != Epic AND status in (\"Code Review\", Review) ORDER BY updated DESC',
+        'jql': 'project = ${JIRA_PROJECT} AND issuetype != Epic AND status in (\"Code Review\", Review) ORDER BY updated DESC',
         'maxResults': 30,
         'fields': 'key,summary,status'
     })
-    url = f'https://redhat.atlassian.net/rest/api/3/search/jql?{params}'
+    url = f'https://${JIRA_INSTANCE}/rest/api/3/search/jql?{params}'
     req = urllib.request.Request(url, headers={
         'Authorization': f'Basic {auth}',
         'Accept': 'application/json'
@@ -630,9 +645,9 @@ echo ""
 # --- Section 1e: Siblings — open children of each epic's parent (non-OCMUI) ---
 echo "### SECTION: SIBLINGS"
 curl -s -u "$JIRA_EMAIL:$JIRA_TOKEN" \
-  "https://redhat.atlassian.net/rest/api/3/search/jql" \
+  "https://${JIRA_INSTANCE}/rest/api/3/search/jql" \
   -G \
-  --data-urlencode "jql=project = OCMUI AND issuetype = Epic AND status in (\"In Progress\", Review, Refinement, Backlog) ORDER BY \"Target end\" ASC" \
+  --data-urlencode "jql=project = ${JIRA_PROJECT} AND issuetype = Epic AND status in (\"In Progress\", Review, Refinement, Backlog) ORDER BY \"Target end\" ASC" \
   --data-urlencode "maxResults=40" \
   --data-urlencode "fields=key,parent" \
   --data-urlencode "expand=names" | python3 -c "
@@ -683,7 +698,7 @@ for pkey in parent_keys:
             'maxResults': 15,
             'fields': 'key,summary,status,assignee,issuetype,updated,comment'
         })
-        url = f'https://redhat.atlassian.net/rest/api/3/search/jql?{params}'
+        url = f'https://${JIRA_INSTANCE}/rest/api/3/search/jql?{params}'
         req = urllib.request.Request(url, headers={
             'Authorization': f'Basic {auth}',
             'Accept': 'application/json'
@@ -935,9 +950,9 @@ echo ""
 # --- Section 5: Jira tickets I'm involved in (recent changes) ---
 echo "### SECTION: JIRA_TICKET_ACTIVITY"
 curl -s -u "$JIRA_EMAIL:$JIRA_TOKEN" \
-  "https://redhat.atlassian.net/rest/api/3/search/jql" \
+  "https://${JIRA_INSTANCE}/rest/api/3/search/jql" \
   -G \
-  --data-urlencode "jql=project = OCMUI AND (assignee = currentUser() OR watcher = currentUser() OR reporter = currentUser()) AND issuetype != Epic AND updated >= -${LOOKBACK_DAYS}d ORDER BY updated DESC" \
+  --data-urlencode "jql=project = ${JIRA_PROJECT} AND (assignee = currentUser() OR watcher = currentUser() OR reporter = currentUser()) AND issuetype != Epic AND updated >= -${LOOKBACK_DAYS}d ORDER BY updated DESC" \
   --data-urlencode "maxResults=20" \
   --data-urlencode "fields=key,summary,status,assignee,updated,issuetype" \
   --data-urlencode "expand=changelog" | python3 -c "
