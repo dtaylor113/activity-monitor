@@ -429,6 +429,20 @@ print(json.dumps(results, indent=2))
 "
 echo ""
 
+# Pre-fetch the current user's team slugs (cached for all PR sections)
+# Uses GITHUB_TOKEN="" to prefer keyring token which has read:org scope
+MY_TEAMS=$(GITHUB_TOKEN="" gh api --paginate "user/teams" --jq '[.[].slug]' 2>/dev/null | python3 -c "
+import sys, json
+teams = set()
+for line in sys.stdin:
+    line = line.strip()
+    if line:
+        try: teams.update(json.loads(line))
+        except: pass
+print(json.dumps(sorted(teams)))
+" 2>/dev/null)
+[[ -z "$MY_TEAMS" ]] && MY_TEAMS="[]"
+
 # --- Section 1d: PR lookup for child tickets in Code Review/Review ---
 echo "### SECTION: CHILD_PR_STATUS"
 # Collect child ticket keys in Code Review or Review from the EPIC_CHILDREN output,
@@ -442,6 +456,8 @@ curl -s -u "$JIRA_EMAIL:$JIRA_TOKEN" \
 import sys, json, subprocess, os
 
 REPO = '${REPO}'
+github_user = os.environ['GITHUB_USER']
+my_teams = json.loads('${MY_TEAMS}') if '${MY_TEAMS}' != '' else []
 
 # Try to get child keys from Jira; if the linkedIssuesOf JQL fails, fall back to simpler query
 try:
@@ -497,20 +513,22 @@ for key in child_keys:
             continue
         pr_num = pr_info['number']
 
-        # Get PR author + requested reviewers + mergeable state (single API call)
+        # Get PR author + requested reviewers + requested teams + mergeable state
         pr_author = ''
         mergeable_state = 'unknown'
         requested = []
+        requested_teams = []
         try:
             req_result = subprocess.run(
                 ['gh', 'api', f'repos/{REPO}/pulls/{pr_num}',
-                 '--jq', '{author: .user.login, requested: [.requested_reviewers[].login], mergeable_state: .mergeable_state}'],
+                 '--jq', '{author: .user.login, requested: [.requested_reviewers[].login], requested_teams: [.requested_teams[].slug], mergeable_state: .mergeable_state}'],
                 capture_output=True, text=True, timeout=15
             )
             if req_result.returncode == 0 and req_result.stdout.strip():
                 pr_extra = json.loads(req_result.stdout)
                 pr_author = pr_extra.get('author', '')
                 requested = pr_extra.get('requested', [])
+                requested_teams = pr_extra.get('requested_teams', [])
                 mergeable_state = pr_extra.get('mergeable_state', 'unknown')
         except: pass
 
@@ -555,6 +573,11 @@ for key in child_keys:
         for u in requested:
             if u not in existing:
                 reviewers.append({'user': u, 'state': 'pending'})
+                existing.add(u)
+        # Add current user as pending if in a requested team but not already listed
+        if github_user != pr_author and github_user not in existing:
+            if any(team in my_teams for team in requested_teams):
+                reviewers.append({'user': github_user, 'state': 'pending'})
 
         # Get last 8 unresolved non-bot comments (issue + review via GraphQL)
         comments = []
@@ -870,24 +893,29 @@ echo ""
 # --- Section 4b: PR reviews and checks status for all PRs ---
 echo "### SECTION: PR_STATUS"
 echo "{"
+
 FIRST=true
 for PR_NUM in $ALL_PR_NUMS; do
   [[ -z "$PR_NUM" ]] && continue
   STATUS=$(python3 -c "
-import subprocess, json
+import subprocess, json, os
 pr_num = ${PR_NUM}
 repo = '${REPO}'
+github_user = os.environ['GITHUB_USER']
+my_teams = json.loads('${MY_TEAMS}')
 
-# Get PR author + requested reviewers + mergeable state (single API call)
+# Get PR author + requested reviewers + requested teams + mergeable state
 pr_author = ''
 mergeable_state = 'unknown'
 requested = []
+requested_teams = []
 try:
-    r = subprocess.run(['gh', 'api', f'repos/{repo}/pulls/{pr_num}', '--jq', '{author: .user.login, requested: [.requested_reviewers[].login], mergeable_state: .mergeable_state, draft: .draft}'], capture_output=True, text=True, timeout=15)
+    r = subprocess.run(['gh', 'api', f'repos/{repo}/pulls/{pr_num}', '--jq', '{author: .user.login, requested: [.requested_reviewers[].login], requested_teams: [.requested_teams[].slug], mergeable_state: .mergeable_state, draft: .draft}'], capture_output=True, text=True, timeout=15)
     if r.returncode == 0 and r.stdout.strip():
         pr_data = json.loads(r.stdout)
         pr_author = pr_data.get('author', '')
         requested = pr_data.get('requested', [])
+        requested_teams = pr_data.get('requested_teams', [])
         mergeable_state = pr_data.get('mergeable_state', 'unknown')
 except: pass
 
@@ -925,6 +953,12 @@ existing_users = {rv['user'] for rv in reviewers}
 for user in requested:
     if user not in existing_users:
         reviewers.append({'user': user, 'state': 'pending'})
+        existing_users.add(user)
+
+# Add current user as pending if they are in a requested team but not already listed
+if github_user != pr_author and github_user not in existing_users:
+    if any(team in my_teams for team in requested_teams):
+        reviewers.append({'user': github_user, 'state': 'pending'})
 
 # Checks
 checks_status = 'unknown'

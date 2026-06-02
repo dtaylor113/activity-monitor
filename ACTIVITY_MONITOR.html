@@ -75,15 +75,17 @@ tr.epic-detail td { background: #0d0d1a; padding: 10px 14px 10px 48px; border-to
 .child-pr-info .pr-comment-list { margin-top: 3px; }
 .child-pr-info .pr-reviewer-list { margin: 3px 0 3px 4px; font-size: 11px; }
 .reviewer-line { display: inline-flex; flex-wrap: wrap; gap: 2px 6px; }
-.ai-text { color: #a5b4fc; font-style: italic; font-size: 11px; }
+.ai-text { color: #a5b4fc; font-style: italic; font-size: 11px; margin-left: 26px; }
 .ai-text::before { content: '✦ '; opacity: 0.6; }
 .uber-ai { color: #e2e8f0; font-size: 12px; font-weight: 500; padding: 8px 12px; margin-bottom: 8px; border-left: 3px solid #a5b4fc; background: rgba(165, 180, 252, 0.06); border-radius: 0 4px 4px 0; line-height: 1.5; }
 .uber-ai::before { content: '⚡ '; }
-.detail-toggle-bar { margin-bottom: 10px; }
-.detail-expand-btn { background: rgba(165, 180, 252, 0.12); border: 1px solid rgba(165, 180, 252, 0.3); color: #a5b4fc; font-size: 11px; padding: 3px 10px; border-radius: 3px; cursor: pointer; }
-.detail-expand-btn:hover { background: rgba(165, 180, 252, 0.2); }
 .section-collapsible { display: none; }
 .section-collapsible.expanded { display: block; }
+.section-toggle { display: inline-block; cursor: pointer; font-size: 20px; margin-right: 6px; color: #6b7280; transition: transform 0.15s; vertical-align: middle; }
+.section-toggle:hover { color: #60a5fa; }
+.section-toggle.open { transform: rotate(90deg); color: #60a5fa; }
+.detail-label { cursor: pointer; user-select: none; }
+.detail-label:hover { color: #93c5fd; }
 
 /* PR comment sub-rows */
 tr.pr-comments { display: none; }
@@ -171,12 +173,11 @@ function renderEpicsTable() {
     if (hasDetail) {
       html += `<tr class="epic-detail" data-epic-id="${idx}"><td colspan="8"><div class="detail-panel">`;
       if (e.uber_ai) html += `<div class="uber-ai">${esc(e.uber_ai)}</div>`;
-      html += `<div class="detail-toggle-bar"><button class="detail-expand-btn" data-panel-id="panel-${idx}">Show Details</button></div>`;
 
       if (hasComments) {
-        html += `<div class="detail-section"><div class="detail-label">Latest Comments</div>`;
+        html += `<div class="detail-section"><div class="detail-label" data-section-toggle="comments-${idx}"><span class="section-toggle">&#9656;</span>Latest Comments</div>`;
         if (e.comments_ai) html += `<div class="ai-text">${esc(e.comments_ai)}</div>`;
-        html += `<div class="section-collapsible" data-panel-group="panel-${idx}"><ul>`;
+        html += `<div class="section-collapsible" data-section-id="comments-${idx}"><ul>`;
         e.comments.forEach(c => {
           html += `<li class="detail-change">${esc(c.author)} (${c.created.slice(5)}): "${esc(c.body)}"</li>`;
         });
@@ -193,9 +194,9 @@ function renderEpicsTable() {
           else if (ffRe.test(child.summary)) groups.ff.push(child);
           else groups.dev.push(child);
         });
-        html += `<div class="detail-section"><div class="detail-label">Children (${ch.total_open} open)</div>`;
+        html += `<div class="detail-section"><div class="detail-label" data-section-toggle="children-${idx}"><span class="section-toggle">&#9656;</span>Children (${ch.total_open} open)</div>`;
         if (ch.ai_summary) html += `<div class="ai-text">${esc(ch.ai_summary)}</div>`;
-        html += `<div class="section-collapsible" data-panel-group="panel-${idx}">`;
+        html += `<div class="section-collapsible" data-section-id="children-${idx}">`;
         const renderChildList = (children) => {
           children.forEach(child => {
             html += `<li>${jiraLink(child.key)} <span style="color:#9ca3af">(${esc(child.status)})</span> — ${esc(child.summary)} — <em>${esc(child.assignee)}</em>`;
@@ -249,9 +250,9 @@ function renderEpicsTable() {
 
       if (hasParentComments) {
         const parentAi = D.parent_comments_ai && D.parent_comments_ai[parentKey];
-        html += `<div class="detail-section"><div class="detail-label">Parent Comments (${jiraLink(parentKey)})</div>`;
+        html += `<div class="detail-section"><div class="detail-label" data-section-toggle="parent-${idx}"><span class="section-toggle">&#9656;</span>Parent Comments (${jiraLink(parentKey)})</div>`;
         if (parentAi) html += `<div class="ai-text">${esc(parentAi)}</div>`;
-        html += `<div class="section-collapsible" data-panel-group="panel-${idx}"><ul>`;
+        html += `<div class="section-collapsible" data-section-id="parent-${idx}"><ul>`;
         D.parent_comments[parentKey].forEach(c => {
           html += `<li>${esc(c.author)} (${c.created.slice(5)}): "${esc(c.body)}"</li>`;
         });
@@ -261,9 +262,9 @@ function renderEpicsTable() {
       if (hasSiblings) {
         const sibs = D.siblings[e.key];
         const sibsAi = D.siblings_ai && D.siblings_ai[e.key];
-        html += `<div class="detail-section"><div class="detail-label">Siblings (${sibs.length} open)</div>`;
+        html += `<div class="detail-section"><div class="detail-label" data-section-toggle="siblings-${idx}"><span class="section-toggle">&#9656;</span>Siblings (${sibs.length} open)</div>`;
         if (sibsAi) html += `<div class="ai-text">${esc(sibsAi)}</div>`;
-        html += `<div class="section-collapsible" data-panel-group="panel-${idx}"><ul>`;
+        html += `<div class="section-collapsible" data-section-id="siblings-${idx}"><ul>`;
         sibs.forEach(s => {
           html += `<li>${jiraLink(s.key)} <span style="color:#9ca3af">(${esc(s.status)})</span> — ${esc(s.summary)} — <em>${esc(s.assignee)}</em>`;
           if (s.latest_comment) {
@@ -284,9 +285,32 @@ function renderEpicsTable() {
 }
 
 function renderPRs() {
-  const myUser = D.meta.github_user || 'dtaylor113';
+  const myUser = D.meta.github_user;
   const myPRs = D.prs.filter(pr => pr.author === myUser);
-  const reviewingPRs = D.prs.filter(pr => pr.author !== myUser).sort((a, b) => (a.updated || '').localeCompare(b.updated || ''));
+  const reviewStatePriority = {pending: 0, commented: 1, changes_requested: 2};
+  const reviewingPRs = D.prs.filter(pr => {
+    if (pr.author === myUser) return false;
+    const st = D.pr_status && D.pr_status[pr.number];
+    if (!st || !st.reviewers) return false;
+    const myReview = st.reviewers.find(r => r.user === myUser);
+    return myReview && myReview.state !== 'approved';
+  }).sort((a, b) => {
+    const stA = D.pr_status[a.number], stB = D.pr_status[b.number];
+    const myA = stA.reviewers.find(r => r.user === myUser);
+    const myB = stB.reviewers.find(r => r.user === myUser);
+    const priA = reviewStatePriority[myA.state] ?? 9;
+    const priB = reviewStatePriority[myB.state] ?? 9;
+    if (priA !== priB) return priA - priB;
+    return (a.updated || '').localeCompare(b.updated || '');
+  });
+
+  const approvedPRs = D.prs.filter(pr => {
+    if (pr.author === myUser) return false;
+    const st = D.pr_status && D.pr_status[pr.number];
+    if (!st || !st.reviewers) return false;
+    const myReview = st.reviewers.find(r => r.user === myUser);
+    return myReview && myReview.state === 'approved';
+  }).sort((a, b) => (a.updated || '').localeCompare(b.updated || ''));
 
   let html = '';
 
@@ -300,7 +324,12 @@ function renderPRs() {
     html += renderPRTable(reviewingPRs, 'reviewing-prs-table');
   }
 
-  if (!myPRs.length && !reviewingPRs.length) {
+  if (approvedPRs.length) {
+    html += `<h3>PRs I've Approved <button class="pr-comments-toggle" data-table="approved-prs-table">Show Comments</button></h3>`;
+    html += renderPRTable(approvedPRs, 'approved-prs-table');
+  }
+
+  if (!myPRs.length && !reviewingPRs.length && !approvedPRs.length) {
     html += `<h3>PRs Needing My Attention</h3><div style="color:#6b7280;">No open PRs needing attention.</div>`;
   }
 
@@ -399,14 +428,16 @@ function initInteractions() {
     });
   });
 
-  // Detail section expand/collapse buttons
-  document.querySelectorAll('.detail-expand-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const panelId = btn.getAttribute('data-panel-id');
-      const sections = document.querySelectorAll(`.section-collapsible[data-panel-group="${panelId}"]`);
-      const anyExpanded = Array.from(sections).some(s => s.classList.contains('expanded'));
-      sections.forEach(s => s.classList.toggle('expanded', !anyExpanded));
-      btn.textContent = anyExpanded ? 'Show Details' : 'Hide Details';
+  // Per-section expand/collapse toggles
+  document.querySelectorAll('[data-section-toggle]').forEach(label => {
+    label.addEventListener('click', () => {
+      const sectionId = label.getAttribute('data-section-toggle');
+      const content = document.querySelector(`[data-section-id="${sectionId}"]`);
+      const chevron = label.querySelector('.section-toggle');
+      if (content) {
+        content.classList.toggle('expanded');
+        if (chevron) chevron.classList.toggle('open');
+      }
     });
   });
 

@@ -125,7 +125,10 @@ labels — they describe the substance of discussions at a useful level of detai
 
 Good: "Bug: Terraform provider fails when enabling AutoNode. Team has fix ready, need PM input on severity."
 Good: "You commented yesterday, awaiting reply from jmekkatt."
+Good: "4 Dev + 3 QE + 3 Flag open. 8 unassigned. All still To Do — not yet started"
 Bad (too vague): "questions raised, bug discussed"
+Bad (too vague): "Network tags + E2E." — says nothing about status or blockers
+Bad (too vague): "3 stories. PR #454 fixed." — which stories? what's their status?
 Bad (too literal): "They have a PR fix they can contribute, but t..."
 
 **"Ball in court" rule:** For PR AI summaries, always note who has the ball:
@@ -134,12 +137,20 @@ Bad (too literal): "They have a PR fix they can contribute, but t..."
 This tells the user at a glance whether they need to act or are waiting.
 
 **Age indicators:** Every AI summary must be prefixed with a freshness label based
-on the most recent comment date being summarized:
+on the most recent activity date being summarized:
 - `@ today`, `@ 1 day ago`, `@ N days ago` (under 14 days)
 - `@ ~N weeks ago` (14–59 days)
 - `@ ~N months ago` (60+ days)
 
 This tells the reader whether the discussion is active or stale.
+
+For **children summaries**, the age uses ALL activity sources — not just Jira comments:
+- Jira comments on child tickets
+- Child PR comments (from `child_pr_status`)
+- Child PR updated dates
+
+The age label includes the **source** in parentheses: `@ 3 days ago (PR)` or `@ today (Jira)`.
+This tells the reader where the most recent activity is happening.
 
 **Fields that receive AI summaries:**
 - `epics[].comments_ai` — synthesis of the epic's latest comments
@@ -152,8 +163,16 @@ This tells the reader whether the discussion is active or stale.
   - 🟢 READY — positive status, waiting on external gate
   - Plain text — low urgency / backlog
 - `parent_comments_ai.{KEY}` — synthesis of parent ticket comments
-- `epic_children.{KEY}.ai_summary` — summary of children status and their comments
-- `siblings_ai.{KEY}` — summary of sibling ticket status and comments
+- `epic_children.{KEY}.ai_summary` — children status with **category breakdown** and per-status PR detail:
+  - Categories: **Dev** (default), **QE** ("E2E Automation"/"Post-merge testing"/"CI Automation" in title), **Flag** ("Feature Flag" in title)
+  - Format: `"N Cat (X To Do, Y In Progress, Z Code Review: #PR review-status, W Review: #PR review-status)"`
+  - For Code Review/Review statuses, include the PR number and reviewer breakdown
+  - Join categories with ` + `
+  - Review status uses: `N approved`, `N changes requested`, `N pending`, or `no reviewers yet`
+  - Example: `"@ 3 days ago (Jira) — 5 Dev (3 To Do, 1 Code Review: #515 no reviewers yet, 1 Review: #454 2 approved, 1 changes requested) + 2 QE (1 To Do, 1 In Progress) + 2 Flag (2 To Do)"`
+- `siblings_ai.{KEY}` — auto-generated summary grouped by Jira ticket prefix with
+  status counts per prefix. Format: `"@ <age> (<source>) — PREFIX1 (N Status1, N Status2) + PREFIX2 (N Status3)"`.
+  Example: `"@ 1 day ago (Jira) — ROSAENG (1 To Do, 2 In Progress) + OSDOCS (1 In Progress) + PERFSCALE (1 Release Pending)"`
 - `prs[].ai_summary` — PR-level summary: staleness, comment themes, blocking issues
 - `child_pr_status.{KEY}.ai_summary` — child PR comment synthesis
 
@@ -233,28 +252,42 @@ Sub-sections:
 </tr>
 <tr class="epic-detail"><td colspan="8"><div class="detail-panel">
   <div class="uber-ai">⚡ Cross-section AI synthesis with urgency indicators</div>
-  <div class="detail-toggle-bar"><button class="detail-expand-btn">Show Details</button></div>
-  <div class="detail-section"><div class="detail-label">Latest Comments</div>
+  <!-- Each sub-section has its own independent expand/collapse chevron -->
+  <div class="detail-section">
+    <div class="detail-label" data-section-toggle="comments-N"><span class="section-toggle">&#9656;</span>Latest Comments</div>
     <div class="ai-text">✦ AI summary of comments</div>
-    <div class="section-collapsible"><!-- collapsed by default -->
-    <ul><li class="detail-change">Author (Date): "comment body"</li></ul>
+    <div class="section-collapsible" data-section-id="comments-N"><!-- collapsed by default, toggled independently -->
+      <ul><li class="detail-change">Author (Date): "comment body"</li></ul>
+    </div>
   </div>
-  <div class="detail-section"><div class="detail-label">Children (N open)</div>
-    <ul><li><a href="...">OCMUI-XXXX</a> (Status) — Summary — <em>Assignee</em>
-      <div class="child-comment">→ Author (Date): "latest comment"</div>
-      <div class="child-pr-info">  <!-- shown for Code Review/Review children -->
-        <a href="...">#PRnum</a> by author ✓approvals ✗changes_requested
-        <div class="pr-comment-list">
-          <div class="child-comment">→ user (date): "body"</div>
+  <div class="detail-section">
+    <div class="detail-label" data-section-toggle="children-N"><span class="section-toggle">&#9656;</span>Children (N open)</div>
+    <div class="ai-text">✦ AI summary of children</div>
+    <div class="section-collapsible" data-section-id="children-N">
+      <ul><li><a href="...">OCMUI-XXXX</a> (Status) — Summary — <em>Assignee</em>
+        <div class="child-comment">→ Author (Date): "latest comment"</div>
+        <div class="child-pr-info">
+          <a href="...">#PRnum</a> by author ✓approvals ✗changes_requested
+          <div class="pr-comment-list">
+            <div class="child-comment">→ user (date): "body"</div>
+          </div>
         </div>
-      </div>
-    </li></ul>
+      </li></ul>
+    </div>
   </div>
-  <div class="detail-section"><div class="detail-label">Parent Alignment</div>
-    <div class="detail-change"><a href="...">PARENT-KEY</a> (summary) — Target: Date — <span class="mismatch-flag">DATE MISMATCH</span></div>
+  <div class="detail-section">
+    <div class="detail-label" data-section-toggle="parent-N"><span class="section-toggle">&#9656;</span>Parent Comments</div>
+    <div class="ai-text">✦ AI summary of parent comments</div>
+    <div class="section-collapsible" data-section-id="parent-N">
+      <ul><li>Author (Date): "comment"</li></ul>
+    </div>
   </div>
-  <div class="detail-section"><div class="detail-label">Parent Comments</div>
-    <ul><li>Author (Date): "comment"</li></ul>
+  <div class="detail-section">
+    <div class="detail-label" data-section-toggle="siblings-N"><span class="section-toggle">&#9656;</span>Siblings (N open)</div>
+    <div class="ai-text">✦ AI summary of siblings</div>
+    <div class="section-collapsible" data-section-id="siblings-N">
+      <ul><li><a href="...">OCMUI-XXXX</a> (Status) — Summary — <em>Assignee</em></li></ul>
+    </div>
   </div>
 </div></td></tr>
 ```
@@ -500,8 +533,22 @@ existing features and produce the full HTML.
   standalone "Epic Status Changes", "Parent Feature Alignment", and "Latest
   Parent Comments" sections. Those sections NO LONGER exist as separate tables.
 
-**GitHub PRs** (split into "My PRs" and "PRs I'm Reviewing"):
-PR | Title | Author | Reviewers | Checks | AI Summary | Updated
+**GitHub PRs** (split into three tables):
+
+1. **My PRs** — PRs authored by `$GITHUB_USER`
+2. **PRs I'm Reviewing** — PRs where the user is a requested reviewer (individually
+   or via team membership) and has NOT yet approved. States shown: pending, commented,
+   changes_requested. Sorted by the user's own review state priority:
+   pending (awaiting review) → commented (left a review comment) → changes_requested
+   (already blocked). Within same priority, sorted by oldest updated first.
+3. **PRs I've Approved** — PRs where the user's review state is `approved`. Separated
+   to reduce noise since these no longer require action.
+
+The filter uses `pr_status[N].reviewers` to determine membership. Team-based review
+requests are resolved by fetching the user's GitHub teams (`user/teams` endpoint) and
+adding the user as "pending" when a requested team matches.
+
+Columns: PR | Title | Author | Reviewers | Checks | AI Summary | Updated
 - Title = full PR title (includes Jira ticket ID prefix, e.g. "OCMUI-4330: ...")
 - Author = GitHub username who opened the PR
 - Reviewers = individual reviewers with colored status (approved/changes_requested/commented/pending)
