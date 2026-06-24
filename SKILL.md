@@ -88,6 +88,77 @@ window.ACTIVITY_DATA = {
 
 ---
 
+## Chat Output Format
+
+After every skill run (data gather + assembly + AI summaries), print a
+standardized chat summary to the user. This format is the same regardless of
+how the user triggers the skill ("regather and run", "catch me up", "been away",
+"what happened", "run activity monitor", etc.).
+
+### Structure
+
+```
+**GitHub PRs:**
+
+- bullet per PR with notable activity since last_checked
+- annotate WHY each PR is listed (see categories below)
+- final bullet: review queue count ("Review queue: N PRs awaiting you")
+
+---
+
+**Jira activity (since <date>):**
+
+- bullet per ticket with a meaningful change since last_checked
+
+---
+
+**Priority actions:**
+1. Most urgent action (max 3 items)
+```
+
+### GitHub PR categories
+
+Each bullet is annotated with its reason for inclusion:
+
+- **Your PR** — current reviewer states, blockers, what's needed to merge
+- **Review requested from you** — who opened it, what it does, when requested
+- **You were mentioned** — context of the mention, who mentioned you
+- **Review queue count** (final bullet) — just the count, no detail (dashboard has the full list)
+
+### GitHub PR rules
+
+- Only include PRs with activity since `last_checked`
+- PRs with no new comments, reviews, or status changes are omitted
+- Sort: your PRs first, then review requests, then mentions
+- No tables — bullet lists only
+- When a PR is blocked by `changes_requested`, include a one-line quoted summary
+  of the reviewer's last review comment or review body. Truncate to ~80 chars if
+  needed. This gives the user immediate context on what needs fixing without
+  opening GitHub.
+
+### Jira rules
+
+- Show: status transitions, reassignments, closures, resolution changes
+- Omit: sprint-only changes (unless the ticket is assigned to the user)
+- Omit: tickets with no meaningful state change
+
+### Priority actions rules
+
+- Maximum 3 items, numbered
+- Ordered by urgency:
+  1. Blockers on your PRs (e.g., changes_requested you need to address)
+  2. Direct review requests
+  3. Mentions requiring response
+- Each item names the PR/ticket and states what to do
+
+### Omission rules
+
+- If a section has zero items, omit that section entirely (don't print an empty heading)
+- No emojis in the chat output
+- Do not open a browser window — tell the user to refresh their pinned tab
+
+---
+
 ## Workflow
 
 Run the helper script to gather raw data, then present a structured summary.
@@ -178,7 +249,23 @@ This tells the reader where the most recent activity is happening.
 
 If the script isn't available or fails, fall back to the manual queries below.
 
-### 2. Present the summary
+### 2. Assemble and generate AI summaries
+
+After gather completes, run assembly and then **always** generate AI summaries:
+
+```bash
+# Assemble raw data into activity-data.js (preserves existing AI summaries)
+export SENIOR_STAFF=$(GITHUB_TOKEN="" gh api "orgs/RedHatInsights/teams/uhc-portal-senior-staff/members" --jq '[.[].login]')
+python3 scripts/assemble.py /tmp/gather-output.txt .
+```
+
+Then read `activity-data.js`, inspect every PR and epic that has an empty or stale
+`ai_summary`, generate a fresh summary per the rules above, and **write the updated
+`activity-data.js` back to disk**. This step is MANDATORY — never skip it.
+
+PRs with empty `ai_summary` fields will render as blank cells in the dashboard.
+
+### 3. Present the summary
 
 The HTML page uses this hierarchy. Follow it exactly:
 
@@ -533,20 +620,24 @@ existing features and produce the full HTML.
   standalone "Epic Status Changes", "Parent Feature Alignment", and "Latest
   Parent Comments" sections. Those sections NO LONGER exist as separate tables.
 
-**GitHub PRs** (split into three tables):
+**GitHub PRs** (split into four tables):
 
 1. **My PRs** — PRs authored by `$GITHUB_USER`
-2. **PRs I'm Reviewing** — PRs where the user is a requested reviewer (individually
-   or via team membership) and has NOT yet approved. States shown: pending, commented,
-   changes_requested. Sorted by the user's own review state priority:
-   pending (awaiting review) → commented (left a review comment) → changes_requested
-   (already blocked). Within same priority, sorted by oldest updated first.
-3. **PRs I've Approved** — PRs where the user's review state is `approved`. Separated
-   to reduce noise since these no longer require action.
+2. **PRs I'm Reviewing** — PRs where the user needs to act:
+   - Directly requested PRs (individually assigned as reviewer), OR
+   - Team-requested PRs where NO other senior staff member is individually assigned as a reviewer (unclaimed team requests).
+   Sorted by review state priority: pending → commented → changes_requested.
+   Within same priority, sorted by oldest updated first.
+3. **Senior Staff PRs** — Team-requested PRs where another senior staff member is
+   already individually assigned as a reviewer. These are lower priority since
+   someone else on the team is already responsible for the review.
+4. **PRs I've Approved** — PRs where the user's review state is `approved`.
 
 The filter uses `pr_status[N].reviewers` to determine membership. Team-based review
 requests are resolved by fetching the user's GitHub teams (`user/teams` endpoint) and
-adding the user as "pending" when a requested team matches.
+adding the user as "pending" with a `via_team` field when a requested team matches.
+The senior staff member list is stored in `meta.senior_staff` (fetched from the
+`uhc-portal-senior-staff` GitHub team at gather time via `$SENIOR_STAFF` env var).
 
 Columns: PR | Title | Author | Reviewers | Checks | AI Summary | Updated
 - Title = full PR title (includes Jira ticket ID prefix, e.g. "OCMUI-4330: ...")

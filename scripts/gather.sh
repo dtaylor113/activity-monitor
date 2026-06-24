@@ -30,6 +30,16 @@ if [[ ${#MISSING[@]} -gt 0 ]]; then
   exit 1
 fi
 
+# --- Validate Jira token is working ---
+JIRA_AUTH_CHECK=$(curl -s -o /dev/null -w "%{http_code}" -u "$JIRA_EMAIL:$JIRA_TOKEN" "https://${JIRA_INSTANCE}/rest/api/3/myself")
+if [[ "$JIRA_AUTH_CHECK" != "200" ]]; then
+  echo "ERROR: Jira authentication failed (HTTP $JIRA_AUTH_CHECK)." >&2
+  echo "Your JIRA_TOKEN may have expired. Generate a new one at:" >&2
+  echo "  https://id.atlassian.com/manage-profile/security/api-tokens" >&2
+  echo "Then update ~/ocmui-tokens.sh and re-source it." >&2
+  exit 1
+fi
+
 REPO="$GITHUB_REPO"
 
 # Parse arguments
@@ -443,6 +453,11 @@ print(json.dumps(sorted(teams)))
 " 2>/dev/null)
 [[ -z "$MY_TEAMS" ]] && MY_TEAMS="[]"
 
+# Fetch senior staff team members (for PR triage logic)
+SENIOR_STAFF=$(GITHUB_TOKEN="" gh api "orgs/RedHatInsights/teams/uhc-portal-senior-staff/members" --jq '[.[].login]' 2>/dev/null)
+[[ -z "$SENIOR_STAFF" ]] && SENIOR_STAFF="[]"
+export SENIOR_STAFF
+
 # --- Section 1d: PR lookup for child tickets in Code Review/Review ---
 echo "### SECTION: CHILD_PR_STATUS"
 # Collect child ticket keys in Code Review or Review from the EPIC_CHILDREN output,
@@ -576,8 +591,9 @@ for key in child_keys:
                 existing.add(u)
         # Add current user as pending if in a requested team but not already listed
         if github_user != pr_author and github_user not in existing:
-            if any(team in my_teams for team in requested_teams):
-                reviewers.append({'user': github_user, 'state': 'pending'})
+            matched_teams = [t for t in requested_teams if t in my_teams]
+            if matched_teams:
+                reviewers.append({'user': github_user, 'state': 'pending', 'via_team': matched_teams[0]})
 
         # Get last 8 unresolved non-bot comments (issue + review via GraphQL)
         comments = []
@@ -957,8 +973,9 @@ for user in requested:
 
 # Add current user as pending if they are in a requested team but not already listed
 if github_user != pr_author and github_user not in existing_users:
-    if any(team in my_teams for team in requested_teams):
-        reviewers.append({'user': github_user, 'state': 'pending'})
+    matched_teams = [t for t in requested_teams if t in my_teams]
+    if matched_teams:
+        reviewers.append({'user': github_user, 'state': 'pending', 'via_team': matched_teams[0]})
 
 # Checks
 checks_status = 'unknown'

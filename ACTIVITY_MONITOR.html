@@ -287,14 +287,45 @@ function renderEpicsTable() {
 function renderPRs() {
   const myUser = D.meta.github_user;
   const myPRs = D.prs.filter(pr => pr.author === myUser);
+  const seniorStaff = D.meta.senior_staff || [];
   const reviewStatePriority = {pending: 0, commented: 1, changes_requested: 2};
-  const reviewingPRs = D.prs.filter(pr => {
-    if (pr.author === myUser) return false;
+
+  // Categorize PRs where I'm a reviewer
+  const directReviewPRs = [];
+  const seniorStaffPRs = [];
+  const approvedPRs = [];
+
+  D.prs.forEach(pr => {
+    if (pr.author === myUser) return;
     const st = D.pr_status && D.pr_status[pr.number];
-    if (!st || !st.reviewers) return false;
+    if (!st || !st.reviewers) return;
     const myReview = st.reviewers.find(r => r.user === myUser);
-    return myReview && myReview.state !== 'approved';
-  }).sort((a, b) => {
+    if (!myReview) return;
+
+    if (myReview.state === 'approved') {
+      approvedPRs.push(pr);
+      return;
+    }
+
+    const isViaTeam = !!myReview.via_team;
+
+    if (!isViaTeam) {
+      directReviewPRs.push(pr);
+    } else {
+      const otherSeniorAssigned = st.reviewers.some(r =>
+        r.user !== myUser &&
+        seniorStaff.includes(r.user) &&
+        !r.via_team
+      );
+      if (otherSeniorAssigned) {
+        seniorStaffPRs.push(pr);
+      } else {
+        directReviewPRs.push(pr);
+      }
+    }
+  });
+
+  directReviewPRs.sort((a, b) => {
     const stA = D.pr_status[a.number], stB = D.pr_status[b.number];
     const myA = stA.reviewers.find(r => r.user === myUser);
     const myB = stB.reviewers.find(r => r.user === myUser);
@@ -303,14 +334,8 @@ function renderPRs() {
     if (priA !== priB) return priA - priB;
     return (a.updated || '').localeCompare(b.updated || '');
   });
-
-  const approvedPRs = D.prs.filter(pr => {
-    if (pr.author === myUser) return false;
-    const st = D.pr_status && D.pr_status[pr.number];
-    if (!st || !st.reviewers) return false;
-    const myReview = st.reviewers.find(r => r.user === myUser);
-    return myReview && myReview.state === 'approved';
-  }).sort((a, b) => (a.updated || '').localeCompare(b.updated || ''));
+  seniorStaffPRs.sort((a, b) => (a.updated || '').localeCompare(b.updated || ''));
+  approvedPRs.sort((a, b) => (a.updated || '').localeCompare(b.updated || ''));
 
   let html = '';
 
@@ -319,9 +344,14 @@ function renderPRs() {
     html += renderPRTable(myPRs, 'my-prs-table');
   }
 
-  if (reviewingPRs.length) {
+  if (directReviewPRs.length) {
     html += `<h3>PRs I'm Reviewing <button class="pr-comments-toggle" data-table="reviewing-prs-table">Show Comments</button></h3>`;
-    html += renderPRTable(reviewingPRs, 'reviewing-prs-table');
+    html += renderPRTable(directReviewPRs, 'reviewing-prs-table');
+  }
+
+  if (seniorStaffPRs.length) {
+    html += `<h3>Senior Staff PRs <button class="pr-comments-toggle" data-table="senior-prs-table">Show Comments</button></h3>`;
+    html += renderPRTable(seniorStaffPRs, 'senior-prs-table');
   }
 
   if (approvedPRs.length) {
@@ -329,7 +359,7 @@ function renderPRs() {
     html += renderPRTable(approvedPRs, 'approved-prs-table');
   }
 
-  if (!myPRs.length && !reviewingPRs.length && !approvedPRs.length) {
+  if (!myPRs.length && !directReviewPRs.length && !seniorStaffPRs.length && !approvedPRs.length) {
     html += `<h3>PRs Needing My Attention</h3><div style="color:#6b7280;">No open PRs needing attention.</div>`;
   }
 
@@ -368,7 +398,8 @@ function renderReviewers(reviewers) {
   };
   return `<span class="reviewer-line">` + reviewers.map(r => {
     const s = stateMap[r.state] || stateMap.pending;
-    return `<span style="color:${s.color};white-space:nowrap;" title="${r.state}">${s.icon} ${esc(r.user)}</span>`;
+    const displayName = r.via_team ? r.via_team.replace(/-/g, ' ') : r.user;
+    return `<span style="color:${s.color};white-space:nowrap;" title="${r.via_team ? 'via team: ' + r.via_team : r.state}">${s.icon} ${esc(displayName)}</span>`;
   }).join(' &nbsp;') + `</span>`;
 }
 
@@ -472,6 +503,8 @@ function initInteractions() {
     });
     Array.from(assignees).sort().forEach(n => { const o = document.createElement('option'); o.value = n; o.textContent = n; assigneeSelect.appendChild(o); });
     ['In Progress','Review','Refinement','Backlog'].forEach(s => { if (statuses.has(s)) { const o = document.createElement('option'); o.value = s; o.textContent = s; statusSelect.appendChild(o); }});
+    statusSelect.value = 'In Progress';
+    applyFilters();
   }
 
   // Resizable columns

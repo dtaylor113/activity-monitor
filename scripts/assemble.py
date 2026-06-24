@@ -53,7 +53,7 @@ def load_previous_ai(output_dir):
 
 
 def assemble(raw, output_dir):
-    github_user = os.environ['GITHUB_USER']
+    github_user = os.environ.get('GITHUB_USER', 'dtaylor113')
     bot_users = {'coderabbitai[bot]', 'codecov[bot]', 'sourcery-ai[bot]'}
 
     epics = json.loads(extract_section(raw, 'ALL_EPICS'))
@@ -152,11 +152,13 @@ def assemble(raw, output_dir):
             cpr['reviewers'] = [r for r in cpr.get('reviewers', []) if r['user'] not in bot_users]
 
     # Assemble data
+    senior_staff = json.loads(os.environ.get('SENIOR_STAFF', '[]'))
     data = {
         'meta': {
             'last_checked': datetime.now().astimezone().isoformat(),
             'lookback_days': 3,
-            'github_user': github_user
+            'github_user': github_user,
+            'senior_staff': senior_staff
         },
         'epics': epics,
         'parent_alignment': parent_alignment,
@@ -171,70 +173,14 @@ def assemble(raw, output_dir):
         'jira_activity': jira_activity
     }
 
-    # Generate siblings AI summaries (grouped by ticket prefix with status counts)
-    today = date.today()
-
-    def _age_with_source(dates_with_source):
-        parsed = []
-        for d, source in dates_with_source:
-            if not d:
-                continue
-            try:
-                if 'T' in d:
-                    parsed.append((datetime.fromisoformat(d.replace('Z', '+00:00')).date(), source))
-                else:
-                    parsed.append((datetime.strptime(d[:10], '%Y-%m-%d').date(), source))
-            except:
-                pass
-        if not parsed:
-            return ''
-        most_recent = max(parsed, key=lambda x: x[0])
-        dt, source = most_recent
-        delta = (today - dt).days
-        if delta == 0:
-            age = '@ today'
-        elif delta == 1:
-            age = '@ 1 day ago'
-        elif delta < 14:
-            age = f'@ {delta} days ago'
-        elif delta < 60:
-            age = f'@ ~{delta // 7} weeks ago'
-        else:
-            age = f'@ ~{delta // 30} months ago'
-        return f"{age} ({source})"
-
-    for epic_key, sibs in siblings.items():
-        if not sibs:
-            continue
-        # Age indicator from most recent activity
-        all_dates = []
-        for s in sibs:
-            if s.get('updated'):
-                all_dates.append((s['updated'], 'Jira'))
-            if s.get('latest_comment') and s['latest_comment'].get('created'):
-                all_dates.append((s['latest_comment']['created'], 'Jira'))
-        age = _age_with_source(all_dates)
-
-        by_prefix = {}
-        for s in sibs:
-            prefix = s['key'].split('-')[0]
-            by_prefix.setdefault(prefix, []).append(s)
-        prefix_parts = []
-        for prefix, items in by_prefix.items():
-            status_counts = {}
-            for item in items:
-                status_counts[item['status']] = status_counts.get(item['status'], 0) + 1
-            status_strs = [f"{count} {status}" for status, count in status_counts.items()]
-            prefix_parts.append(f"{prefix} ({', '.join(status_strs)})")
-        summary = ' + '.join(prefix_parts)
-        data['siblings_ai'][epic_key] = f"{age} — {summary}" if age else summary
-
     # Merge AI summaries from previous run
     prev = load_previous_ai(output_dir)
     if prev:
         # Top-level AI fields
         if prev.get('parent_comments_ai'):
             data['parent_comments_ai'] = prev['parent_comments_ai']
+        if prev.get('siblings_ai'):
+            data['siblings_ai'] = prev['siblings_ai']
 
         # Epic-level AI fields
         prev_epics = {e['key']: e for e in prev.get('epics', []) if isinstance(e, dict)}
