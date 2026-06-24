@@ -639,6 +639,12 @@ adding the user as "pending" with a `via_team` field when a requested team match
 The senior staff member list is stored in `meta.senior_staff` (fetched from the
 `uhc-portal-senior-staff` GitHub team at gather time via `$SENIOR_STAFF` env var).
 
+**Review state upgrade from issue comments:** If a reviewer's formal review state is
+`pending` (no review submitted via GitHub's review UI) but they have left general
+issue comments on the PR, their state is upgraded to `commented`. This ensures the
+dashboard accurately reflects engagement even when reviewers use general comments
+instead of the formal "Submit review" workflow.
+
 Columns: PR | Title | Author | Reviewers | Checks | AI Summary | Updated
 - Title = full PR title (includes Jira ticket ID prefix, e.g. "OCMUI-4330: ...")
 - Author = GitHub username who opened the PR

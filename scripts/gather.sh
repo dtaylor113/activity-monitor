@@ -635,6 +635,12 @@ for key in child_keys:
         comments.sort(key=lambda c: c.get('created_at', ''), reverse=True)
         comments = comments[:8]
 
+        # Upgrade "pending" reviewers to "commented" if they left issue comments
+        commenters = {c['user'] for c in comments if c.get('user')}
+        for rv in reviewers:
+            if rv['state'] == 'pending' and rv['user'] in commenters:
+                rv['state'] = 'commented'
+
         # Get CI check status
         checks_status = 'unknown'
         try:
@@ -976,6 +982,17 @@ if github_user != pr_author and github_user not in existing_users:
     matched_teams = [t for t in requested_teams if t in my_teams]
     if matched_teams:
         reviewers.append({'user': github_user, 'state': 'pending', 'via_team': matched_teams[0]})
+
+# Upgrade "pending" reviewers to "commented" if they left issue comments
+try:
+    r = subprocess.run(['gh', 'api', f'repos/{repo}/issues/{pr_num}/comments',
+        '--jq', '[.[].user.login]'], capture_output=True, text=True, timeout=15)
+    if r.returncode == 0 and r.stdout.strip():
+        issue_commenters = set(json.loads(r.stdout))
+        for rv in reviewers:
+            if rv['state'] == 'pending' and rv['user'] in issue_commenters:
+                rv['state'] = 'commented'
+except: pass
 
 # Checks
 checks_status = 'unknown'
