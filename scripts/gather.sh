@@ -812,7 +812,7 @@ echo "### SECTION: REVIEW_REQUESTS"
 REVIEW_REQUESTS_JSON=$(gh api --method GET search/issues \
   -f "q=repo:${REPO} is:pr is:open review-requested:${GITHUB_USER}" \
   -F per_page=10 \
-  --jq '[.items[] | {number, title: .title, author: .user.login, updated_at}]' 2>/dev/null || echo "[]")
+  --jq '[.items[] | {number, title: .title, author: .user.login, updated_at, created_at}]' 2>/dev/null || echo "[]")
 echo "$REVIEW_REQUESTS_JSON"
 REVIEW_REQUEST_NUMS=$(echo "$REVIEW_REQUESTS_JSON" | python3 -c "import sys,json; print(' '.join(str(p['number']) for p in json.load(sys.stdin)))" 2>/dev/null)
 echo ""
@@ -822,22 +822,32 @@ echo "### SECTION: STALE_REVIEWS"
 STALE_REVIEWS_JSON=$(gh api --method GET search/issues \
   -f "q=repo:${REPO} is:pr is:open reviewed-by:${GITHUB_USER} -review:approved -author:${GITHUB_USER}" \
   -F per_page=10 \
-  --jq '[.items[] | {number, title: .title, author: .user.login, updated_at}]' 2>/dev/null || echo "[]")
+  --jq '[.items[] | {number, title: .title, author: .user.login, updated_at, created_at}]' 2>/dev/null || echo "[]")
 echo "$STALE_REVIEWS_JSON"
 STALE_REVIEW_NUMS=$(echo "$STALE_REVIEWS_JSON" | python3 -c "import sys,json; print(' '.join(str(p['number']) for p in json.load(sys.stdin)))" 2>/dev/null)
 MY_PR_NUMS=$(gh pr list --repo "$REPO" --author "$GITHUB_USER" --state open --json number --jq '.[].number' 2>/dev/null)
 echo ""
 
-# --- Section 3c: My open PRs (always include regardless of activity) ---
+# --- Section 3c: PRs where I was @mentioned in comments ---
+echo "### SECTION: MENTIONS"
+MENTIONS_JSON=$(gh api --method GET search/issues \
+  -f "q=repo:${REPO} is:pr is:open mentions:${GITHUB_USER} -author:${GITHUB_USER}" \
+  -F per_page=10 \
+  --jq '[.items[] | {number, title: .title, author: .user.login, updated_at, created_at}]' 2>/dev/null || echo "[]")
+echo "$MENTIONS_JSON"
+MENTION_NUMS=$(echo "$MENTIONS_JSON" | python3 -c "import sys,json; print(' '.join(str(p['number']) for p in json.load(sys.stdin)))" 2>/dev/null)
+echo ""
+
+# --- Section 3d: My open PRs (always include regardless of activity) ---
 echo "### SECTION: MY_OPEN_PRS"
-gh pr list --repo "$REPO" --author "$GITHUB_USER" --state open --json number,title,updatedAt,isDraft \
-  --jq '[.[] | {number, title, updated_at: .updatedAt, is_draft: .isDraft}]' 2>/dev/null || echo "[]"
+gh pr list --repo "$REPO" --author "$GITHUB_USER" --state open --json number,title,updatedAt,createdAt,isDraft \
+  --jq '[.[] | {number, title, updated_at: .updatedAt, created_at: .createdAt, is_draft: .isDraft}]' 2>/dev/null || echo "[]"
 echo ""
 
 # --- Section 4: Last 3 human comments for all PRs needing attention ---
 # Reuses PR numbers collected from earlier sections (avoid duplicate API calls)
 echo "### SECTION: PR_COMMENTS"
-ALL_PR_NUMS=$(echo "$REVIEW_REQUEST_NUMS $STALE_REVIEW_NUMS $MY_PR_NUMS" | tr ' ' '\n' | sort -un | tr '\n' ' ')
+ALL_PR_NUMS=$(echo "$REVIEW_REQUEST_NUMS $STALE_REVIEW_NUMS $MY_PR_NUMS $MENTION_NUMS" | tr ' ' '\n' | sort -un | tr '\n' ' ')
 
 BOTS="codecov|coderabbitai|github-actions|dependabot"
 echo "["
@@ -854,7 +864,7 @@ all_comments = []
 
 # Issue comments (general PR conversation — these are never 'resolved')
 r = subprocess.run(['gh', 'api', f'repos/{repo}/issues/{pr_num}/comments',
-    '--jq', '[.[] | {user: .user.login, body: .body[:150], updated_at: .created_at}]'],
+    '--jq', '[.[] | {user: .user.login, body: .body[:1000], updated_at: .created_at}]'],
     capture_output=True, text=True, timeout=15)
 if r.returncode == 0 and r.stdout.strip():
     all_comments.extend(json.loads(r.stdout))
@@ -888,7 +898,7 @@ if r.returncode == 0 and r.stdout.strip():
             author = c.get('author',{}).get('login','')
             all_comments.append({
                 'user': author,
-                'body': c.get('body','')[:150],
+                'body': c.get('body','')[:500],
                 'updated_at': c.get('createdAt','')[:10]
             })
 
@@ -910,6 +920,22 @@ if all_comments:
   fi
 done
 echo "]"
+echo ""
+
+# --- Section 4a: Full @mention comments for mentioned PRs ---
+echo "### SECTION: MENTION_COMMENTS"
+echo "{"
+FIRST=true
+for PR_NUM in $MENTION_NUMS; do
+  [[ -z "$PR_NUM" ]] && continue
+  MENTION_BODY=$(gh api "repos/${REPO}/issues/${PR_NUM}/comments" \
+    --jq "[.[] | select(.body | contains(\"@${GITHUB_USER}\")) | {user: .user.login, body: .body, created_at: .created_at}]" 2>/dev/null || echo "[]")
+  if [[ -n "$MENTION_BODY" && "$MENTION_BODY" != "[]" ]]; then
+    if [[ "$FIRST" == "true" ]]; then FIRST=false; else echo ","; fi
+    echo "\"${PR_NUM}\": ${MENTION_BODY}"
+  fi
+done
+echo "}"
 echo ""
 
 # --- Section 4b: PR reviews and checks status for all PRs ---
@@ -1065,5 +1091,123 @@ for issue in data.get('issues', []):
 
 print(json.dumps(results, indent=2))
 "
+echo ""
+
+# --- Section 6: Jira tickets where I was @mentioned (last 1 month, unanswered) ---
+echo "### SECTION: JIRA_MENTIONS"
+MY_JIRA_ACCOUNT_ID=$(curl -s -u "$JIRA_EMAIL:$JIRA_TOKEN" "https://${JIRA_INSTANCE}/rest/api/3/myself" | python3 -c "import sys,json; print(json.load(sys.stdin).get('accountId',''))" 2>/dev/null)
+curl -s -u "$JIRA_EMAIL:$JIRA_TOKEN" \
+  "https://${JIRA_INSTANCE}/rest/api/3/search/jql" \
+  -G \
+  --data-urlencode "jql=project = ${JIRA_PROJECT} AND status not in (Done, Closed) AND updated >= -4w AND assignee != currentUser() AND reporter != currentUser() ORDER BY updated DESC" \
+  --data-urlencode "fields=key,summary,status,assignee,updated,comment" \
+  --data-urlencode "maxResults=50" | python3 -c "
+import sys, json
+from datetime import datetime, timedelta, timezone
+
+MY_ID = '${MY_JIRA_ACCOUNT_ID}'
+ONE_MONTH_AGO = (datetime.now(timezone.utc) - timedelta(weeks=4)).isoformat()
+
+data = json.load(sys.stdin)
+issues = data.get('issues', [])
+mentioned_in = []
+
+for issue in issues:
+    key = issue['key']
+    fields = issue.get('fields', {})
+    comments = fields.get('comment', {}).get('comments', [])
+    # Check comments in reverse (most recent first) for a mention of me
+    mention_comment = None
+    mention_date = None
+    for c in reversed(comments):
+        created = c.get('created', '')
+        if created < ONE_MONTH_AGO:
+            continue
+        body = c.get('body', {})
+        def has_mention(node):
+            if isinstance(node, dict):
+                if node.get('type') == 'mention' and node.get('attrs', {}).get('id') == MY_ID:
+                    return True
+                for v in node.values():
+                    if has_mention(v):
+                        return True
+            elif isinstance(node, list):
+                for item in node:
+                    if has_mention(item):
+                        return True
+            return False
+        if has_mention(body):
+            mention_comment = c
+            mention_date = created
+            break
+
+    if not mention_comment:
+        continue
+
+    # Check if I replied to the mentioner in a later comment
+    # (my later comment must @mention the person who mentioned me)
+    mentioner_id = mention_comment.get('author', {}).get('accountId', '')
+    i_responded = False
+    for c in comments:
+        c_date = c.get('created', '')
+        if c_date <= mention_date:
+            continue
+        c_author_id = c.get('author', {}).get('accountId', '')
+        if c_author_id != MY_ID:
+            continue
+        # Check if this comment @mentions the original mentioner
+        def mentions_user(node, target_id):
+            if isinstance(node, dict):
+                if node.get('type') == 'mention' and node.get('attrs', {}).get('id') == target_id:
+                    return True
+                for v in node.values():
+                    if mentions_user(v, target_id):
+                        return True
+            elif isinstance(node, list):
+                for item in node:
+                    if mentions_user(item, target_id):
+                        return True
+            return False
+        if mentions_user(c.get('body', {}), mentioner_id):
+            i_responded = True
+            break
+
+    if i_responded:
+        continue
+
+    # Extract text from the mention comment
+    author = mention_comment.get('author', {}).get('displayName', '?')
+    texts = []
+    def get_text(node):
+        if isinstance(node, dict):
+            if node.get('type') == 'text':
+                texts.append(node.get('text', ''))
+            elif node.get('type') == 'mention':
+                texts.append(node.get('attrs', {}).get('text', ''))
+            for v in node.values():
+                get_text(v)
+        elif isinstance(node, list):
+            for item in node:
+                get_text(item)
+    get_text(mention_comment.get('body', {}))
+    full_text = ' '.join(texts)[:300]
+    mentioned_in.append({
+        'key': key,
+        'summary': fields.get('summary', '')[:100],
+        'status': fields.get('status', {}).get('name', ''),
+        'assignee': (fields.get('assignee') or {}).get('displayName', 'Unassigned'),
+        'mentioned_by': author,
+        'mention_date': mention_date[:10],
+        'mention_text': full_text
+    })
+
+print(json.dumps(mentioned_in, indent=2))
+"
+echo ""
+
+# ─── ACTION ITEMS FROM GOOGLE DOCS ───────────────────────────────────
+echo "### SECTION: ACTION_ITEMS"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+bash "$SCRIPT_DIR/gather-actions.sh" 2>/dev/null || echo "[]"
 echo ""
 echo "=== END ==="

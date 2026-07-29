@@ -43,11 +43,10 @@ def load_previous_ai(output_dir):
     try:
         with open(path) as f:
             content = f.read()
-        match = re.search(r'window\.ACTIVITY_DATA\s*=\s*', content)
-        if not match:
-            return {}
-        js_content = content[match.end():].rstrip().rstrip(';')
-        return json.loads(js_content)
+        # Support both "const D = {...}" and "window.ACTIVITY_DATA = {...}" formats
+        start = content.index('{')
+        end = content.rindex('}') + 1
+        return json.loads(content[start:end])
     except Exception:
         return {}
 
@@ -63,10 +62,17 @@ def assemble(raw, output_dir):
     siblings = parse_json_safe(extract_section(raw, 'SIBLINGS'), {})
     review_requests = json.loads(extract_section(raw, 'REVIEW_REQUESTS') or '[]')
     stale_reviews = json.loads(extract_section(raw, 'STALE_REVIEWS') or '[]')
+    mentions = json.loads(extract_section(raw, 'MENTIONS') or '[]')
     my_open_prs = json.loads(extract_section(raw, 'MY_OPEN_PRS') or '[]')
     pr_status = parse_json_safe(extract_section(raw, 'PR_STATUS'), {})
     jta_raw = extract_section(raw, 'JIRA_TICKET_ACTIVITY')
     jira_activity = json.loads(jta_raw) if jta_raw else []
+
+    action_items_raw = extract_section(raw, 'ACTION_ITEMS')
+    action_items = json.loads(action_items_raw) if action_items_raw else []
+
+    jira_mentions_raw = extract_section(raw, 'JIRA_MENTIONS')
+    jira_mentions = json.loads(jira_mentions_raw) if jira_mentions_raw else []
 
     pc_raw = extract_section(raw, 'PR_COMMENTS')
     pr_comments_flat = []
@@ -104,6 +110,7 @@ def assemble(raw, output_dir):
         pr_map[pr['number']] = {
             'number': pr['number'], 'title': pr['title'], 'author': github_user,
             'is_mine': True, 'updated': pr['updated_at'][:10],
+            'created': (pr.get('created_at') or '')[:10],
             'what': 'Draft' if pr.get('is_draft') else '', 'comments': []
         }
     for pr in review_requests:
@@ -111,6 +118,7 @@ def assemble(raw, output_dir):
             pr_map[pr['number']] = {
                 'number': pr['number'], 'title': pr['title'], 'author': pr['author'],
                 'is_mine': False, 'updated': pr['updated_at'][:10],
+                'created': (pr.get('created_at') or '')[:10],
                 'what': 'review requested', 'comments': []
             }
     for pr in stale_reviews:
@@ -118,12 +126,25 @@ def assemble(raw, output_dir):
             pr_map[pr['number']] = {
                 'number': pr['number'], 'title': pr['title'], 'author': pr['author'],
                 'is_mine': False, 'updated': pr['updated_at'][:10],
+                'created': (pr.get('created_at') or '')[:10],
                 'what': 'stale review', 'comments': []
             }
         else:
             entry = pr_map[pr['number']]
             if 'stale' not in entry.get('what', ''):
                 entry['what'] = ('stale review, ' + entry.get('what', '')).strip(', ')
+    for pr in mentions:
+        if pr['number'] not in pr_map:
+            pr_map[pr['number']] = {
+                'number': pr['number'], 'title': pr['title'], 'author': pr['author'],
+                'is_mine': False, 'updated': pr['updated_at'][:10],
+                'created': (pr.get('created_at') or '')[:10],
+                'what': 'mentioned', 'comments': []
+            }
+        else:
+            entry = pr_map[pr['number']]
+            if 'mention' not in entry.get('what', ''):
+                entry['what'] = (entry.get('what', '') + ', mentioned').strip(', ')
 
     # Group PR comments
     pr_comments_by_num = {}
@@ -140,6 +161,28 @@ def assemble(raw, output_dir):
     for num, comments in pr_comments_by_num.items():
         if num in pr_map:
             pr_map[num]['comments'] = sorted(comments, key=lambda x: x['when'], reverse=True)[:8]
+
+    # Populate mention_raw for mentioned PRs using MENTION_COMMENTS section
+    mention_comments_raw = extract_section(raw, 'MENTION_COMMENTS')
+    mention_comments = parse_json_safe(mention_comments_raw, {})
+    for num, entry in pr_map.items():
+        if 'mention' not in entry.get('what', ''):
+            continue
+        entry.setdefault('mention_summary', '')
+        entry.setdefault('mention_raw', '')
+        mc_list = mention_comments.get(str(num), [])
+        if isinstance(mc_list, dict):
+            mc_list = [mc_list]
+        # Find most recent comment where @user appears in non-quoted text
+        for mc in sorted(mc_list, key=lambda x: x.get('created_at', ''), reverse=True):
+            body = mc.get('body', '')
+            non_quoted = '\n'.join(l for l in body.split('\n') if not l.strip().startswith('>'))
+            if f'@{github_user}' in non_quoted:
+                lines = [l for l in body.split('\n') if not l.strip().startswith('>')]
+                meaningful = [l for l in lines if l.strip()]
+                tail = meaningful[-10:] if len(meaningful) > 10 else meaningful
+                entry['mention_raw'] = '\n'.join(tail)
+                break
 
     prs_list = sorted(pr_map.values(), key=lambda x: x['updated'])
 
@@ -170,7 +213,11 @@ def assemble(raw, output_dir):
         'siblings_ai': {},
         'prs': prs_list,
         'pr_status': pr_status,
-        'jira_activity': jira_activity
+        'jira_activity': jira_activity,
+        'action_items': action_items,
+        'jira_mentions': jira_mentions,
+        'dismissed_jira_mentions': [],
+        'retro_items': []
     }
 
     # Merge AI summaries from previous run
@@ -191,12 +238,22 @@ def assemble(raw, output_dir):
             if pe.get('uber_ai') and 'uber_ai' not in epic:
                 epic['uber_ai'] = pe['uber_ai']
 
-        # PR AI summaries
+        # PR AI summaries — only preserve if comment data hasn't changed
         prev_prs = {p['number']: p for p in prev.get('prs', []) if isinstance(p, dict)}
         for pr in data['prs']:
             pp = prev_prs.get(pr['number'], {})
-            if pp.get('ai_summary') and 'ai_summary' not in pr:
+            if not pp:
+                continue
+            cur_comments = pr.get('comments', [])
+            prev_comments = pp.get('comments', [])
+            comments_changed = (
+                len(cur_comments) != len(prev_comments) or
+                (cur_comments and prev_comments and cur_comments[0].get('when') != prev_comments[0].get('when'))
+            )
+            if pp.get('ai_summary') and 'ai_summary' not in pr and not comments_changed:
                 pr['ai_summary'] = pp['ai_summary']
+            if pp.get('mention_summary') and not pr.get('mention_summary') and not comments_changed:
+                pr['mention_summary'] = pp['mention_summary']
 
         # Epic children AI summaries
         prev_children = prev.get('epic_children', {})
@@ -212,14 +269,39 @@ def assemble(raw, output_dir):
             if isinstance(pcpr, dict) and pcpr.get('ai_summary') and isinstance(cpr, dict) and 'ai_summary' not in cpr:
                 cpr['ai_summary'] = pcpr['ai_summary']
 
+        # Action item AI summaries — match by (doc_id, text[:100])
+        prev_actions = {(a['doc_id'], a['text'][:100]): a for a in prev.get('action_items', []) if isinstance(a, dict)}
+        for item in data['action_items']:
+            key = (item['doc_id'], item['text'][:100])
+            pa = prev_actions.get(key, {})
+            if pa.get('ai_summary') and not item.get('ai_summary'):
+                item['ai_summary'] = pa['ai_summary']
+
+        # Retro items — preserve from previous run (manually maintained)
+        if prev.get('retro_items'):
+            data['retro_items'] = prev['retro_items']
+
+        # Dismissed jira mentions — preserve from previous run (manually maintained)
+        if prev.get('dismissed_jira_mentions'):
+            data['dismissed_jira_mentions'] = prev['dismissed_jira_mentions']
+
+        # Jira mentions AI summaries — match by issue key
+        prev_jira_mentions = {m['key']: m for m in prev.get('jira_mentions', []) if isinstance(m, dict)}
+        for item in data['jira_mentions']:
+            pm = prev_jira_mentions.get(item['key'], {})
+            if pm.get('ai_summary') and not item.get('ai_summary'):
+                # Only preserve if mention_text hasn't changed
+                if pm.get('mention_text') == item.get('mention_text'):
+                    item['ai_summary'] = pm['ai_summary']
+
     # Write output
     output_path = os.path.join(output_dir, 'activity-data.js')
     with open(output_path, 'w') as f:
-        f.write('window.ACTIVITY_DATA = ')
+        f.write('const D = ')
         json.dump(data, f, indent=2)
         f.write(';')
 
-    return len(epics), len(prs_list), len(child_pr_status)
+    return len(epics), len(prs_list), len(child_pr_status), len(action_items), len(jira_mentions)
 
 
 def main():
@@ -236,8 +318,8 @@ def main():
         with open(input_path) as f:
             raw = f.read()
 
-    n_epics, n_prs, n_child_prs = assemble(raw, output_dir)
-    print(f"[activity-monitor] Assembled: {n_epics} epics, {n_prs} PRs, {n_child_prs} child PRs")
+    n_epics, n_prs, n_child_prs, n_actions, n_jira_mentions = assemble(raw, output_dir)
+    print(f"[activity-monitor] Assembled: {n_epics} epics, {n_prs} PRs, {n_child_prs} child PRs, {n_actions} action items, {n_jira_mentions} jira mentions")
 
 
 if __name__ == '__main__':

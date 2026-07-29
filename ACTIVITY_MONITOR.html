@@ -77,6 +77,7 @@ tr.epic-detail td { background: #0d0d1a; padding: 10px 14px 10px 48px; border-to
 .reviewer-line { display: inline-flex; flex-wrap: wrap; gap: 2px 6px; }
 .ai-text { color: #a5b4fc; font-style: italic; font-size: 11px; margin-left: 26px; }
 .ai-text::before { content: '✦ '; opacity: 0.6; }
+.ai-diamond { color: #a5b4fc; font-style: italic; font-size: 11px; }
 .uber-ai { color: #e2e8f0; font-size: 12px; font-weight: 500; padding: 8px 12px; margin-bottom: 8px; border-left: 3px solid #a5b4fc; background: rgba(165, 180, 252, 0.06); border-radius: 0 4px 4px 0; line-height: 1.5; }
 .uber-ai::before { content: '⚡ '; }
 .section-collapsible { display: none; }
@@ -112,7 +113,6 @@ tr.pr-comments td { background: #0d0d1a; border-top: none; padding: 3px 10px 6px
 <div id="app"></div>
 <script src="activity-data.js"></script>
 <script>
-const D = window.ACTIVITY_DATA;
 const JIRA = 'https://redhat.atlassian.net/browse/';
 const GH = 'https://github.com/RedHatInsights/uhc-portal/pull/';
 
@@ -290,17 +290,26 @@ function renderPRs() {
   const seniorStaff = D.meta.senior_staff || [];
   const reviewStatePriority = {pending: 0, commented: 1, changes_requested: 2};
 
-  // Categorize PRs where I'm a reviewer
+  // Categorize PRs where I'm a reviewer or mentioned
   const directReviewPRs = [];
   const seniorStaffPRs = [];
   const approvedPRs = [];
+  const mentionedPRs = [];
 
   D.prs.forEach(pr => {
     if (pr.author === myUser) return;
     const st = D.pr_status && D.pr_status[pr.number];
     if (!st || !st.reviewers) return;
     const myReview = st.reviewers.find(r => r.user === myUser);
-    if (!myReview) return;
+
+    const isMentioned = (pr.what || '').includes('mention');
+    if (isMentioned) {
+      mentionedPRs.push(pr);
+    }
+
+    if (!myReview) {
+      return;
+    }
 
     if (myReview.state === 'approved') {
       approvedPRs.push(pr);
@@ -325,17 +334,10 @@ function renderPRs() {
     }
   });
 
-  directReviewPRs.sort((a, b) => {
-    const stA = D.pr_status[a.number], stB = D.pr_status[b.number];
-    const myA = stA.reviewers.find(r => r.user === myUser);
-    const myB = stB.reviewers.find(r => r.user === myUser);
-    const priA = reviewStatePriority[myA.state] ?? 9;
-    const priB = reviewStatePriority[myB.state] ?? 9;
-    if (priA !== priB) return priA - priB;
-    return (a.updated || '').localeCompare(b.updated || '');
-  });
-  seniorStaffPRs.sort((a, b) => (a.updated || '').localeCompare(b.updated || ''));
-  approvedPRs.sort((a, b) => (a.updated || '').localeCompare(b.updated || ''));
+  directReviewPRs.sort((a, b) => (a.created || a.updated || '').localeCompare(b.created || b.updated || ''));
+  seniorStaffPRs.sort((a, b) => (a.created || a.updated || '').localeCompare(b.created || b.updated || ''));
+  approvedPRs.sort((a, b) => (a.created || a.updated || '').localeCompare(b.created || b.updated || ''));
+  mentionedPRs.sort((a, b) => (b.updated || '').localeCompare(a.updated || ''));
 
   let html = '';
 
@@ -349,17 +351,26 @@ function renderPRs() {
     html += renderPRTable(directReviewPRs, 'reviewing-prs-table');
   }
 
+  if (mentionedPRs.length) {
+    html += `<h3>PRs I'm Mentioned In</h3>`;
+    html += renderMentionedPRTable(mentionedPRs);
+  }
+
   if (seniorStaffPRs.length) {
-    html += `<h3>Senior Staff PRs <button class="pr-comments-toggle" data-table="senior-prs-table">Show Comments</button></h3>`;
+    html += `<details><summary style="cursor:pointer;"><h3 style="display:inline;">Senior Staff PRs (${seniorStaffPRs.length})</h3></summary>`;
+    html += `<button class="pr-comments-toggle" data-table="senior-prs-table" style="margin:8px 0;">Show Comments</button>`;
     html += renderPRTable(seniorStaffPRs, 'senior-prs-table');
+    html += `</details>`;
   }
 
   if (approvedPRs.length) {
-    html += `<h3>PRs I've Approved <button class="pr-comments-toggle" data-table="approved-prs-table">Show Comments</button></h3>`;
+    html += `<details><summary style="cursor:pointer;"><h3 style="display:inline;">PRs I've Approved (${approvedPRs.length})</h3></summary>`;
+    html += `<button class="pr-comments-toggle" data-table="approved-prs-table" style="margin:8px 0;">Show Comments</button>`;
     html += renderPRTable(approvedPRs, 'approved-prs-table');
+    html += `</details>`;
   }
 
-  if (!myPRs.length && !directReviewPRs.length && !seniorStaffPRs.length && !approvedPRs.length) {
+  if (!myPRs.length && !directReviewPRs.length && !seniorStaffPRs.length && !mentionedPRs.length && !approvedPRs.length) {
     html += `<h3>PRs Needing My Attention</h3><div style="color:#6b7280;">No open PRs needing attention.</div>`;
   }
 
@@ -368,7 +379,7 @@ function renderPRs() {
 
 function renderPRTable(prs, tableId) {
   let html = `<table id="${tableId}"><thead><tr>`;
-  ['PR','Title','Author','Reviewers','Checks','AI Summary','Updated'].forEach(h => {
+  ['PR','Title','Author','Reviewers','Checks','AI Summary','Created'].forEach(h => {
     html += `<th>${h}<span class="sort-indicator">⇅</span><div class="resize-handle"></div></th>`;
   });
   html += `</tr></thead><tbody>`;
@@ -378,11 +389,39 @@ function renderPRTable(prs, tableId) {
     const checksHtml = renderChecksBadge(st.checks || 'unknown');
     const mergeHtml = renderMergeStatus(st.mergeable_state || '');
     const statusHtml = mergeHtml ? checksHtml + '<br>' + mergeHtml : checksHtml;
-    html += `<tr><td class="nowrap">${ghLink(pr.number)}</td><td>${esc(pr.title)}</td><td>${esc(pr.author)}</td><td>${reviewHtml}</td><td class="nowrap">${statusHtml}</td><td class="ai-text">${esc(pr.ai_summary || pr.what || '')}</td><td>${esc(pr.updated)}</td></tr>`;
+    html += `<tr><td class="nowrap">${ghLink(pr.number)}</td><td>${esc(pr.title)}</td><td>${esc(pr.author)}</td><td>${reviewHtml}</td><td class="nowrap">${statusHtml}</td><td class="ai-text">${esc(pr.ai_summary || pr.what || '')}</td><td>${esc(pr.created || pr.updated)}</td></tr>`;
     const comments = (pr.comments || []).slice().sort((a, b) => (b.when || '').localeCompare(a.when || '')).slice(0, 4);
     html += `<tr class="pr-comments"><td></td><td colspan="6">`;
     comments.forEach(c => { html += `<div class="pr-comment-line"><span class="comment-label">${esc(c.who)} (${esc(c.when)}):</span> "${esc(c.body)}"</div>`; });
     html += `</td></tr>`;
+  });
+  html += `</tbody></table>`;
+  return html;
+}
+
+function renderMentionedPRTable(prs) {
+  const myUser = D.meta.github_user;
+  let html = `<table id="mentioned-prs-table" class="pr-table"><thead><tr>`;
+  ['PR','Title','Author','My Involvement','Mention'].forEach(h => {
+    html += `<th>${h}<span class="sort-indicator">⇅</span><div class="resize-handle"></div></th>`;
+  });
+  html += `</tr></thead><tbody>`;
+  prs.forEach(pr => {
+    const st = (D.pr_status && D.pr_status[pr.number]) || {};
+    const myReview = (st.reviewers || []).find(r => r.user === myUser);
+    let involvement = '';
+    if (myReview) {
+      if (myReview.state === 'approved') involvement = 'You Approved';
+      else if (['pending','commented','changes_requested'].includes(myReview.state)) involvement = 'You\'re Reviewing';
+    }
+    const summaryHtml = pr.mention_summary
+      ? `<span class="ai-diamond">◆ ${esc(pr.mention_summary)}</span>`
+      : '';
+    const rawText = pr.mention_raw || '';
+    const rawHtml = rawText
+      ? `<details style="margin-top:4px;"><summary style="cursor:pointer;color:#6b7280;font-size:0.85em;">Show raw comment</summary><pre style="white-space:pre-wrap;font-size:0.8em;margin:4px 0 0;color:#9ca3af;max-height:200px;overflow-y:auto;">${esc(rawText)}</pre></details>`
+      : '';
+    html += `<tr><td class="nowrap">${ghLink(pr.number)}</td><td>${esc(pr.title)}</td><td>${esc(pr.author)}</td><td>${involvement}</td><td>${summaryHtml}${rawHtml}</td></tr>`;
   });
   html += `</tbody></table>`;
   return html;
@@ -417,14 +456,153 @@ function renderMergeStatus(state) {
   return '';
 }
 
+function renderRetroItems() {
+  const retros = D.retro_items || [];
+  if (!retros.length) return '<p class="meta">No retro action items found.</p>';
+
+  let html = `<table id="retro-items-table" class="pr-table"><thead><tr>`;
+  ['Action','Sprint','Age','AI Summary'].forEach(h => {
+    html += `<th>${h}<span class="sort-indicator">⇅</span><div class="resize-handle"></div></th>`;
+  });
+  html += `</tr></thead><tbody>`;
+
+  for (const item of retros) {
+    const age = item.date ? (() => {
+      const d = new Date(item.date);
+      const days = Math.floor((new Date() - d) / 86400000);
+      if (days === 0) return 'today';
+      if (days < 7) return `${days} days ago`;
+      const weeks = Math.floor(days / 7);
+      if (weeks < 5) return `~${weeks} week${weeks>1?'s':''} ago`;
+      return `~${Math.floor(days/30)} months ago`;
+    })() : (item.age || '');
+    const aiDiamond = item.ai_summary ? `<span class="ai-diamond" title="${item.ai_summary.replace(/"/g,'&quot;')}">◆ ${item.ai_summary}</span>` : '';
+    html += `<tr>
+      <td>${item.text}</td>
+      <td>${item.sprint || ''}</td>
+      <td>${age}</td>
+      <td>${aiDiamond}</td>
+    </tr>`;
+  }
+  html += '</tbody></table>';
+  return html;
+}
+
+function formatActionText(text) {
+  const lines = text.split('\n');
+  const main = esc(lines[0]);
+  const subs = lines.slice(1).filter(l => l.startsWith('- '));
+  if (!subs.length) return main;
+  const listItems = subs.map(s => `<li>${esc(s.slice(2))}</li>`).join('');
+  return `${main}<ul style="margin:4px 0 0 16px; padding:0; list-style:disc;">${listItems}</ul>`;
+}
+
+function renderJiraMentions() {
+  const dismissed = D.dismissed_jira_mentions || [];
+  const items = (D.jira_mentions || []).filter(i => !dismissed.includes(i.key));
+  let html = `<h3>JIRAs I'm Mentioned In</h3>`;
+  if (!items.length) return html + `<p class="meta">It's all good.</p>`;
+  let html = `<h3>JIRAs I'm Mentioned In</h3>`;
+  html += `<table id="jira-mentions-table" class="pr-table"><thead><tr>`;
+  ['Ticket','Summary','Status','Assignee','Mentioned By','Date','Comment'].forEach(h => {
+    html += `<th>${h}<span class="sort-indicator">⇅</span><div class="resize-handle"></div></th>`;
+  });
+  html += `</tr></thead><tbody>`;
+  for (const item of items) {
+    const url = `https://redhat.atlassian.net/browse/${item.key}`;
+    const aiDiamond = item.ai_summary ? `<span class="ai-diamond">◆ ${esc(item.ai_summary)}</span><br>` : '';
+    const mentionText = item.mention_text || '';
+    const commentHtml = mentionText
+      ? `${aiDiamond}<details style="margin-top:4px;"><summary style="cursor:pointer;color:#6b7280;font-size:0.85em;">Show comment</summary><pre style="white-space:pre-wrap;font-size:0.8em;margin:4px 0 0;color:#9ca3af;max-height:200px;overflow-y:auto;">${esc(mentionText)}</pre></details>`
+      : aiDiamond;
+    html += `<tr>
+      <td class="nowrap"><a href="${url}" target="_blank">${item.key}</a></td>
+      <td>${esc(item.summary)}</td>
+      <td>${esc(item.status)}</td>
+      <td>${esc(item.assignee)}</td>
+      <td>${esc(item.mentioned_by)}</td>
+      <td class="nowrap">${item.mention_date || ''}</td>
+      <td>${commentHtml}</td>
+    </tr>`;
+  }
+  html += '</tbody></table>';
+  return html;
+}
+
+function renderActionItems() {
+  const items = D.action_items || [];
+  if (!items.length) return '<p class="meta">No action items found.</p>';
+
+  const open = items.filter(i => !i.completed);
+  const done = items.filter(i => i.completed);
+
+  function ageStr(dateStr) {
+    if (!dateStr) return '';
+    const d = new Date(dateStr);
+    const now = new Date();
+    const days = Math.floor((now - d) / 86400000);
+    if (days === 0) return 'today';
+    if (days === 1) return '1 day ago';
+    if (days < 7) return `${days} days ago`;
+    const weeks = Math.floor(days / 7);
+    if (weeks < 5) return `~${weeks} week${weeks>1?'s':''} ago`;
+    const months = Math.floor(days / 30);
+    return `~${months} month${months>1?'s':''} ago`;
+  }
+
+  function renderGroup(groupItems, groupLabel, tableId) {
+    if (!groupItems.length) return '';
+    let html = groupLabel ? `<h4 style="margin:12px 0 6px;">${groupLabel}</h4>` : '';
+    html += `<table id="${tableId}" class="pr-table"><thead><tr>`;
+    ['Action','Source','Date','Age','AI Summary'].forEach(h => {
+      html += `<th>${h}<span class="sort-indicator">⇅</span><div class="resize-handle"></div></th>`;
+    });
+    html += `</tr></thead><tbody>`;
+    for (const item of groupItems) {
+      const anchor = item.heading_id ? `#heading=${item.heading_id}` : '';
+      const docUrl = `https://docs.google.com/document/d/${item.doc_id}/edit${anchor}`;
+      const textStyle = item.completed ? 'text-decoration:line-through; opacity:0.6;' : '';
+      const age = ageStr(item.date);
+      const aiDiamond = item.ai_summary ? `<span class="ai-diamond" title="${item.ai_summary.replace(/"/g,'&quot;')}">◆ ${item.ai_summary}</span>` : '';
+      const actionHtml = formatActionText(item.text);
+      html += `<tr>
+        <td style="${textStyle}">${actionHtml}</td>
+        <td><a href="${docUrl}" target="_blank">${item.doc_name}</a></td>
+        <td>${item.date || ''}</td>
+        <td>${age}</td>
+        <td>${aiDiamond}</td>
+      </tr>`;
+    }
+    html += '</tbody></table>';
+    return html;
+  }
+
+  let html = `<h3>Google Docs</h3>`;
+  html += renderGroup(open, `Open (${open.length})`, 'action-items-open');
+  if (done.length) {
+    html += `<details><summary style="cursor:pointer; margin-top:10px; color:#666;">Completed (${done.length})</summary>`;
+    html += renderGroup(done, '', 'action-items-done');
+    html += '</details>';
+  }
+  html += `<h3>Retro Items</h3>`;
+  html += renderRetroItems();
+  return html;
+}
+
 function renderPage() {
-  const ts = D.meta.last_checked ? new Date(D.meta.last_checked).toLocaleString('en-US', {weekday:'long',year:'numeric',month:'long',day:'numeric',hour:'numeric',minute:'2-digit',timeZoneName:'short'}) : '';
-  let html = `<h1>Activity Monitor for Dave Taylor</h1><div class="meta">Last checked: ${ts}</div>`;
+  const tsFmt = {weekday:'long',year:'numeric',month:'long',day:'numeric',hour:'numeric',minute:'2-digit',timeZoneName:'short'};
+  const ts = D.meta.last_checked ? new Date(D.meta.last_checked).toLocaleString('en-US', tsFmt) : '';
+  const aiTs = D.meta.last_ai_summary ? new Date(D.meta.last_ai_summary).toLocaleString('en-US', tsFmt) : 'N/A';
+  let html = `<h1>Activity Monitor for Dave Taylor</h1><div class="meta">Data fetched: ${ts} &nbsp;|&nbsp; AI summaries: ${aiTs}</div>`;
   html += `<h2>Jira</h2><div class="section-content">`;
   html += renderEpicsTable();
+  html += renderJiraMentions();
   html += `</div>`;
   html += `<h2>GitHub</h2><div class="section-content">`;
   html += renderPRs();
+  html += `</div>`;
+  html += `<h2>Action Items</h2><div class="section-content">`;
+  html += renderActionItems();
   html += `</div>`;
   document.getElementById('app').innerHTML = html;
   initInteractions();

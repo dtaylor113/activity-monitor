@@ -14,6 +14,7 @@ Consolidated status report of recent GitHub PR activity and Jira ticket changes.
 ## Prerequisites
 
 - `gh` CLI authenticated with `repo` and `read:org` scopes
+- `gog` CLI (gogcli.sh v0.17.0+) with Docs and Drive APIs enabled
 - Environment variables set via `ocmui-tokens.sh` (see `setup-tokens.example.sh`):
   - `$GITHUB_USER` — GitHub username
   - `$GITHUB_REPO` — GitHub repo (org/repo format)
@@ -21,6 +22,8 @@ Consolidated status report of recent GitHub PR activity and Jira ticket changes.
   - `$JIRA_TOKEN` — Jira API token
   - `$JIRA_INSTANCE` — Jira hostname (e.g., `redhat.atlassian.net`)
   - `$JIRA_PROJECT` — Jira project key (e.g., `OCMUI`)
+  - `$ACTION_ITEM_NAME` — Name to search for in Google Docs (default: `Dave`)
+  - `$ACTION_ITEM_LOOKBACK` — Days to look back for viewed docs (default: `14`)
 
 ## State File
 
@@ -78,8 +81,11 @@ window.ACTIVITY_DATA = {
   "child_pr_status": { "OCMUI-XXXX": { "pr_number", "pr_title", "pr_state", "pr_author", "pr_updated", "approvals": N, "changes_requested": N, "reviewers": [...], "checks": "passing|failing|pending", "mergeable_state": "clean|blocked|dirty|unstable", "ai_summary": "AI synthesis", "comments": [ { "user", "created_at", "body" } ] } },
   "siblings": { "OCMUI-XXXX": [ { "key", "summary", "status", "assignee", "type", "updated", "latest_comment": { "author", "created", "body" } | null } ] },
   "siblings_ai": { "OCMUI-XXXX": "AI synthesis of sibling status" },
-  "prs": [ { "number", "title", "what", "ai_summary": "AI synthesis", "author", "is_mine": bool, "updated", "comments": [ { "who", "when", "body" } ] }, ... ],
-  "pr_status": { "NUMBER": { "reviewers": [ { "user", "state" } ], "checks": "passing|failing|pending", "mergeable_state": "clean|blocked|dirty|unstable" } }
+  "prs": [ { "number", "title", "what", "ai_summary": "AI synthesis", "author", "is_mine": bool, "created", "updated", "comments": [ { "who", "when", "body" } ], "mention_summary": "AI summary of @mention", "mention_raw": "raw comment text with quotes stripped" }, ... ],
+  "pr_status": { "NUMBER": { "reviewers": [ { "user", "state" } ], "checks": "passing|failing|pending", "mergeable_state": "clean|blocked|dirty|unstable" } },
+  "action_items": [ { "doc_id", "doc_name", "text", "date", "completed": bool, "heading_id": "h.xxxxx", "ai_summary" }, ... ],
+  "jira_mentions": [ { "key", "summary", "status", "assignee", "mentioned_by", "mention_date", "mention_text", "ai_summary" }, ... ],
+  "retro_items": [ { "text", "sprint", "date", "completed": bool, "ai_summary" }, ... ]
 };
 ```
 
@@ -180,7 +186,8 @@ The script outputs JSON sections for each data source:
 - `CHILD_PR_STATUS` — GitHub PR info for children in Code Review/Review
   (matches PRs by searching for the Jira key in PR title first, then PR body/description)
 - `SIBLINGS` — open children of each epic's parent (non-OCMUI tickets: backend, docs, etc.)
-- `REVIEW_REQUESTS`, `STALE_REVIEWS`, `PR_COMMENTS` — PR data
+- `REVIEW_REQUESTS`, `STALE_REVIEWS`, `MENTIONS`, `PR_COMMENTS` — PR data
+- `JIRA_MENTIONS` — Jira tickets where user was @mentioned (last 2 weeks, ADF parsing)
 
 The `ALL_EPICS` section provides the complete epic list every run (no need to
 carry forward from previous runs). Map it directly to the `epics` array in
@@ -567,6 +574,7 @@ Epics to always monitor (regardless of assignment):
 PRs to show in "PRs Needing My Attention":
 - Review requests pending for the user (`review-requested:`)
 - PRs where user's review is stale — reviewed but not approved, new commits pushed (`reviewed-by: -review:approved`)
+- PRs where the user was @mentioned in a comment (`mentions:` — excludes user's own PRs)
 - User's own PRs with new review comments
 - Sort: **oldest first** (longest-waiting gets attention first)
 
@@ -620,7 +628,7 @@ existing features and produce the full HTML.
   standalone "Epic Status Changes", "Parent Feature Alignment", and "Latest
   Parent Comments" sections. Those sections NO LONGER exist as separate tables.
 
-**GitHub PRs** (split into four tables):
+**GitHub PRs** (split into five tables):
 
 1. **My PRs** — PRs authored by `$GITHUB_USER`
 2. **PRs I'm Reviewing** — PRs where the user needs to act:
@@ -628,10 +636,20 @@ existing features and produce the full HTML.
    - Team-requested PRs where NO other senior staff member is individually assigned as a reviewer (unclaimed team requests).
    Sorted by review state priority: pending → commented → changes_requested.
    Within same priority, sorted by oldest updated first.
-3. **Senior Staff PRs** — Team-requested PRs where another senior staff member is
+3. **PRs I'm Mentioned In** — PRs where the user was @mentioned in a comment
+   (regardless of reviewer status). Uses a custom table with columns:
+   PR | Title | Author | Mention. The Mention column shows an AI summary line
+   (visible) and raw comment text (collapsible `<details>`). Only the most recent
+   @mention in non-quoted text is captured per PR. A PR can appear in this table
+   AND in another table simultaneously.
+   Data fields: `mention_summary` (AI one-liner) and `mention_raw` (quote-stripped text).
+   Source: `MENTION_COMMENTS` section in gather.sh fetches full comment bodies for
+   mentioned PRs and `assemble.py` finds the most recent comment where `@user`
+   appears in non-quoted lines.
+4. **Senior Staff PRs** — Team-requested PRs where another senior staff member is
    already individually assigned as a reviewer. These are lower priority since
    someone else on the team is already responsible for the review.
-4. **PRs I've Approved** — PRs where the user's review state is `approved`.
+5. **PRs I've Approved** — PRs where the user's review state is `approved`.
 
 The filter uses `pr_status[N].reviewers` to determine membership. Team-based review
 requests are resolved by fetching the user's GitHub teams (`user/teams` endpoint) and
@@ -645,13 +663,13 @@ issue comments on the PR, their state is upgraded to `commented`. This ensures t
 dashboard accurately reflects engagement even when reviewers use general comments
 instead of the formal "Submit review" workflow.
 
-Columns: PR | Title | Author | Reviewers | Checks | AI Summary | Updated
+Columns: PR | Title | Author | Reviewers | Checks | AI Summary | Created
 - Title = full PR title (includes Jira ticket ID prefix, e.g. "OCMUI-4330: ...")
 - Author = GitHub username who opened the PR
 - Reviewers = individual reviewers with colored status (approved/changes_requested/commented/pending)
 - Checks = CI status (passing/failing/pending) + merge status (mergeable/blocked/conflicts/unstable)
 - AI Summary = synthesized comment themes and staleness (`.ai-text` styled)
-- Updated = date of last activity
+- Created = date PR was opened (oldest PRs surface first for attention)
 - Comment sub-rows beneath each PR (hidden by default, toggled via "Show Comments" button)
   showing up to 8 most recent unresolved non-bot comments (issue + review thread comments,
   sorted newest first). Resolved review threads are excluded via GraphQL `isResolved` field.
@@ -660,6 +678,89 @@ Columns: PR | Title | Author | Reviewers | Checks | AI Summary | Updated
 
 All Jira IDs → `<a href="https://${JIRA_INSTANCE}/browse/KEY">KEY</a>`
 All PR numbers → `<a href="https://github.com/${GITHUB_REPO}/pull/N">#N</a>`
+
+---
+
+## Action Items (Google Docs)
+
+The skill scans recently viewed Google Docs for action items tagged to the user.
+
+### How it works
+
+1. **Discovery**: Uses `gog drive ls` with `viewedByMeTime > 14 days` to find
+   Google Docs the user recently opened (configurable via `$ACTION_ITEM_LOOKBACK`).
+   Action items older than 2 months are filtered out regardless of doc recency.
+2. **Scanning**: For each doc, fetches the raw JSON via `gog docs raw <docId> --json`
+   and searches paragraphs for action item patterns.
+3. **Date extraction**: Walks the document structure looking for `dateElement`
+   objects in HEADING paragraphs to determine when each action item was recorded.
+4. **Completion detection**: Checks `textStyle.strikethrough` on paragraph text runs.
+   Strikethrough = completed.
+5. **Deduplication**: Same text appearing in multiple meeting dates shows only the
+   most recent occurrence.
+
+### Search patterns
+
+The following patterns are matched (case-insensitive) using `$ACTION_ITEM_NAME`:
+
+- `[Dave Action Item]` — full tag in brackets (primary format)
+- `Dave: Action Item:` — colon-separated tag (legacy format)
+
+Note: The simpler `[Dave]` tag is intentionally NOT matched — that pattern is
+too broad and catches general discussion topics, responses, and status updates.
+Users should tag genuine action items with `[Dave Action Item]` in their docs.
+
+### AI summary rules for action items
+
+Each action item gets a one-line AI summary with this format:
+
+```
+({age}) — Brief context about what this action requires and current status.
+```
+
+Rules:
+- Always start with the age indicator in parentheses (e.g., "~7 weeks ago")
+- Indicate if the item appears to be already done (text says "Done", "Ticket updated", etc.)
+- For items referencing Jira tickets, note if the ticket is still active
+- For items older than 2 months, append "Historical." or "Stale." as appropriate
+- For refinement presenter tags (just a JIRA key), note it's a "refinement presenter tag"
+
+### Sub-list capture
+
+When an action item has nested bullet points below it (deeper nesting level),
+those sub-items are collected and appended to the action item text with "- "
+prefix, preserving the full context of the action.
+
+### HTML rendering
+
+The "Action Items" section appears at the bottom of the dashboard with two
+sub-sections:
+
+**Google Docs** — Auto-discovered action items:
+- Open items displayed first in a sortable/resizable table (Action, Source, Date, Age, AI Summary)
+- Completed items (strikethrough) collapsed in a `<details>` disclosure widget
+- Source doc name links directly to the relevant heading in the Google Doc
+  (uses `heading_id` captured from `paragraphStyle.headingId` of the nearest
+  preceding heading paragraph; URL format: `...doc_id/edit#heading=h.xxxxx`)
+
+**Retro Items** — Sprint retrospective incomplete actions:
+- Sourced from Easy Agile TeamRhythm retro boards (manually maintained in
+  `retro_items` array in `activity-data.js` since the Forge app storage is not
+  accessible via Jira REST API)
+- Displays: Action text, Sprint name, Age, AI Summary
+- Update retro items each sprint by editing the `retro_items` array directly
+  or asking the agent to update from the retro board screenshots
+
+**JIRAs I'm Mentioned In** — Jira tickets where someone @mentioned the user:
+- Sourced from `gather.sh` section `JIRA_MENTIONS` which searches open OCMUI
+  tickets updated in the last 4 weeks, parsing ADF comment bodies for mention
+  nodes matching the user's Jira account ID
+- Excludes tickets where user is assignee or reporter (those already tracked)
+- Excludes mentions where the user already responded in a later comment
+- Shows: Ticket key (linked), summary, status, assignee, who mentioned, date,
+  and the comment text (in collapsible details)
+- AI summary generated per mention to explain what's being asked/noted
+- Displayed in the "Jira" section of the HTML, after the epics table
 
 ---
 
