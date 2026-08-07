@@ -62,6 +62,7 @@ def assemble(raw, output_dir):
     siblings = parse_json_safe(extract_section(raw, 'SIBLINGS'), {})
     review_requests = json.loads(extract_section(raw, 'REVIEW_REQUESTS') or '[]')
     stale_reviews = json.loads(extract_section(raw, 'STALE_REVIEWS') or '[]')
+    approved_reviews = json.loads(extract_section(raw, 'APPROVED_REVIEWS') or '[]')
     mentions = json.loads(extract_section(raw, 'MENTIONS') or '[]')
     my_open_prs = json.loads(extract_section(raw, 'MY_OPEN_PRS') or '[]')
     pr_status = parse_json_safe(extract_section(raw, 'PR_STATUS'), {})
@@ -183,6 +184,16 @@ def assemble(raw, output_dir):
                 tail = meaningful[-10:] if len(meaningful) > 10 else meaningful
                 entry['mention_raw'] = '\n'.join(tail)
                 break
+
+    # Add approved PRs that aren't already in pr_map
+    for pr in approved_reviews:
+        if pr['number'] not in pr_map:
+            pr_map[pr['number']] = {
+                'number': pr['number'], 'title': pr['title'], 'author': pr['author'],
+                'is_mine': False, 'updated': pr['updated_at'][:10],
+                'created': (pr.get('created_at') or '')[:10],
+                'what': 'approved', 'comments': []
+            }
 
     prs_list = sorted(pr_map.values(), key=lambda x: x['updated'])
 

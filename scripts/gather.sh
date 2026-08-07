@@ -824,6 +824,17 @@ STALE_REVIEWS_JSON=$(gh api --method GET search/issues \
   --jq '[.items[] | {number, title: .title, author: .user.login, updated_at, created_at}]' 2>/dev/null || echo "[]")
 echo "$STALE_REVIEWS_JSON"
 STALE_REVIEW_NUMS=$(echo "$STALE_REVIEWS_JSON" | python3 -c "import sys,json; print(' '.join(str(p['number']) for p in json.load(sys.stdin)))" 2>/dev/null)
+
+# PRs I've approved that are still open
+APPROVED_REVIEWS_JSON=$(gh api --method GET search/issues \
+  -f "q=repo:${REPO} is:pr is:open review:approved reviewed-by:${GITHUB_USER} -author:${GITHUB_USER}" \
+  -F per_page=10 \
+  --jq '[.items[] | {number, title: .title, author: .user.login, updated_at, created_at}]' 2>/dev/null || echo "[]")
+echo "### SECTION: APPROVED_REVIEWS"
+echo "$APPROVED_REVIEWS_JSON"
+echo ""
+APPROVED_REVIEW_NUMS=$(echo "$APPROVED_REVIEWS_JSON" | python3 -c "import sys,json; print(' '.join(str(p['number']) for p in json.load(sys.stdin)))" 2>/dev/null)
+
 MY_PR_NUMS=$(gh pr list --repo "$REPO" --author "$GITHUB_USER" --state open --json number --jq '.[].number' 2>/dev/null)
 echo ""
 
@@ -846,7 +857,7 @@ echo ""
 # --- Section 4: Last 3 human comments for all PRs needing attention ---
 # Reuses PR numbers collected from earlier sections (avoid duplicate API calls)
 echo "### SECTION: PR_COMMENTS"
-ALL_PR_NUMS=$(echo "$REVIEW_REQUEST_NUMS $STALE_REVIEW_NUMS $MY_PR_NUMS $MENTION_NUMS" | tr ' ' '\n' | sort -un | tr '\n' ' ')
+ALL_PR_NUMS=$(echo "$REVIEW_REQUEST_NUMS $STALE_REVIEW_NUMS $APPROVED_REVIEW_NUMS $MY_PR_NUMS $MENTION_NUMS" | tr ' ' '\n' | sort -un | tr '\n' ' ')
 
 BOTS="codecov|coderabbitai|github-actions|dependabot"
 echo "["
