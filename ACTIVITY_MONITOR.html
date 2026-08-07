@@ -334,7 +334,22 @@ function renderPRs() {
     }
   });
 
-  directReviewPRs.sort((a, b) => (a.created || a.updated || '').localeCompare(b.created || b.updated || ''));
+  directReviewPRs.sort((a, b) => {
+    const stA = (D.pr_status && D.pr_status[a.number]) || {};
+    const stB = (D.pr_status && D.pr_status[b.number]) || {};
+    const myRevA = (stA.reviewers || []).find(r => r.user === myUser);
+    const myRevB = (stB.reviewers || []).find(r => r.user === myUser);
+    // Drafts always last
+    if (stA.draft && !stB.draft) return 1;
+    if (!stA.draft && stB.draft) return -1;
+    // Then sort: pending/commented first, changes_requested second
+    const stateOrder = s => s === 'changes_requested' ? 1 : 0;
+    const orderA = stateOrder(myRevA ? myRevA.state : '');
+    const orderB = stateOrder(myRevB ? myRevB.state : '');
+    if (orderA !== orderB) return orderA - orderB;
+    // Within same group, oldest created first
+    return (a.created || a.updated || '').localeCompare(b.created || b.updated || '');
+  });
   seniorStaffPRs.sort((a, b) => (a.created || a.updated || '').localeCompare(b.created || b.updated || ''));
   approvedPRs.sort((a, b) => (a.created || a.updated || '').localeCompare(b.created || b.updated || ''));
   mentionedPRs.sort((a, b) => (b.updated || '').localeCompare(a.updated || ''));
@@ -391,7 +406,8 @@ function renderPRTable(prs, tableId) {
     const checksHtml = renderChecksBadge(st.checks || 'unknown');
     const mergeHtml = renderMergeStatus(st.mergeable_state || '');
     const statusHtml = mergeHtml ? checksHtml + '<br>' + mergeHtml : checksHtml;
-    html += `<tr><td class="nowrap">${ghLink(pr.number)}</td><td>${esc(pr.title)}</td><td>${esc(pr.author)}</td><td>${reviewHtml}</td><td class="nowrap">${statusHtml}</td><td class="ai-text">${esc(pr.ai_summary || pr.what || '')}</td><td>${esc(pr.created || pr.updated)}</td></tr>`;
+    const titleDisplay = (st.draft ? '[DRAFT] ' : '') + (pr.title || '');
+    html += `<tr><td class="nowrap">${ghLink(pr.number)}</td><td>${esc(titleDisplay)}</td><td>${esc(pr.author)}</td><td>${reviewHtml}</td><td class="nowrap">${statusHtml}</td><td class="ai-text">${esc(pr.ai_summary || pr.what || '')}</td><td>${esc(pr.created || pr.updated)}</td></tr>`;
     const comments = (pr.comments || []).slice().sort((a, b) => (b.when || '').localeCompare(a.when || '')).slice(0, 4);
     html += `<tr class="pr-comments"><td></td><td colspan="6">`;
     comments.forEach(c => { html += `<div class="pr-comment-line"><span class="comment-label">${esc(c.who)} (${esc(c.when)}):</span> "${esc(c.body)}"</div>`; });

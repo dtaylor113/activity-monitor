@@ -955,6 +955,7 @@ pr_author = ''
 mergeable_state = 'unknown'
 requested = []
 requested_teams = []
+is_draft = False
 try:
     r = subprocess.run(['gh', 'api', f'repos/{repo}/pulls/{pr_num}', '--jq', '{author: .user.login, requested: [.requested_reviewers[].login], requested_teams: [.requested_teams[].slug], mergeable_state: .mergeable_state, draft: .draft}'], capture_output=True, text=True, timeout=15)
     if r.returncode == 0 and r.stdout.strip():
@@ -963,6 +964,7 @@ try:
         requested = pr_data.get('requested', [])
         requested_teams = pr_data.get('requested_teams', [])
         mergeable_state = pr_data.get('mergeable_state', 'unknown')
+        is_draft = pr_data.get('draft', False)
 except: pass
 
 # Reviews — paginate to get ALL reviews, last meaningful state per user wins
@@ -1029,7 +1031,7 @@ try:
         elif ck.get('success', 0) > 0: checks_status = 'passing'
 except: pass
 
-print(json.dumps({'reviewers': reviewers, 'checks': checks_status, 'mergeable_state': mergeable_state}))
+print(json.dumps({'reviewers': reviewers, 'checks': checks_status, 'mergeable_state': mergeable_state, 'draft': is_draft}))
 " 2>/dev/null)
   if [[ -n "$STATUS" ]]; then
     if [[ "$FIRST" == "true" ]]; then FIRST=false; else echo ","; fi
