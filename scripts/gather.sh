@@ -608,9 +608,9 @@ for key in child_keys:
         if comments_result.returncode == 0 and comments_result.stdout.strip():
             comments.extend(json.loads(comments_result.stdout))
 
-        # Unresolved review thread comments via GraphQL
+        # Unresolved review thread comments via GraphQL (last 5 per thread)
         owner, repo_name = REPO.split('/')
-        gql_query = 'query { repository(owner: "%s", name: "%s") { pullRequest(number: %d) { reviewThreads(first: 50) { nodes { isResolved comments(last: 1) { nodes { author { login } body createdAt } } } } } } }' % (owner, repo_name, pr_num)
+        gql_query = 'query { repository(owner: "%s", name: "%s") { pullRequest(number: %d) { reviewThreads(first: 50) { nodes { isResolved comments(last: 5) { nodes { author { login } body createdAt } } } } } } }' % (owner, repo_name, pr_num)
         gql_result = subprocess.run(
             ['gh', 'api', 'graphql', '-f', f'query={gql_query}'],
             capture_output=True, text=True, timeout=15
@@ -622,8 +622,7 @@ for key in child_keys:
                 if thread.get('isResolved'):
                     continue
                 nodes = thread.get('comments',{}).get('nodes',[])
-                if nodes:
-                    c = nodes[0]
+                for c in nodes:
                     comments.append({
                         'user': (c.get('author') or {}).get('login',''),
                         'body': c.get('body','')[:150],
@@ -869,14 +868,14 @@ r = subprocess.run(['gh', 'api', f'repos/{repo}/issues/{pr_num}/comments',
 if r.returncode == 0 and r.stdout.strip():
     all_comments.extend(json.loads(r.stdout))
 
-# Review comments — use GraphQL to get only UNRESOLVED thread comments
+# Review comments — use GraphQL to get UNRESOLVED thread comments (last 5 per thread)
 query = '''query {
   repository(owner: \"%s\", name: \"%s\") {
     pullRequest(number: %d) {
       reviewThreads(first: 50) {
         nodes {
           isResolved
-          comments(last: 1) {
+          comments(last: 5) {
             nodes { author { login } body createdAt }
           }
         }
@@ -893,8 +892,7 @@ if r.returncode == 0 and r.stdout.strip():
         if thread.get('isResolved'):
             continue
         comments = thread.get('comments',{}).get('nodes',[])
-        if comments:
-            c = comments[0]
+        for c in comments:
             author = c.get('author',{}).get('login','')
             all_comments.append({
                 'user': author,

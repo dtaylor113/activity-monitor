@@ -368,6 +368,8 @@ function renderPRs() {
     html += `<button class="pr-comments-toggle" data-table="approved-prs-table" style="margin:8px 0;">Show Comments</button>`;
     html += renderPRTable(approvedPRs, 'approved-prs-table');
     html += `</details>`;
+  } else {
+    html += `<h3>PRs I've Approved</h3><p class="meta">It's all good.</p>`;
   }
 
   if (!myPRs.length && !directReviewPRs.length && !seniorStaffPRs.length && !mentionedPRs.length && !approvedPRs.length) {
@@ -502,7 +504,6 @@ function renderJiraMentions() {
   const items = (D.jira_mentions || []).filter(i => !dismissed.includes(i.key));
   let html = `<h3>JIRAs I'm Mentioned In</h3>`;
   if (!items.length) return html + `<p class="meta">It's all good.</p>`;
-  let html = `<h3>JIRAs I'm Mentioned In</h3>`;
   html += `<table id="jira-mentions-table" class="pr-table"><thead><tr>`;
   ['Ticket','Summary','Status','Assignee','Mentioned By','Date','Comment'].forEach(h => {
     html += `<th>${h}<span class="sort-indicator">⇅</span><div class="resize-handle"></div></th>`;
