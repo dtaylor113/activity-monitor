@@ -290,22 +290,16 @@ function renderPRs() {
   const seniorStaff = D.meta.senior_staff || [];
   const reviewStatePriority = {pending: 0, commented: 1, changes_requested: 2};
 
-  // Categorize PRs where I'm a reviewer or mentioned
+  // Categorize PRs where I'm a reviewer
   const directReviewPRs = [];
   const seniorStaffPRs = [];
   const approvedPRs = [];
-  const mentionedPRs = [];
 
   D.prs.forEach(pr => {
     if (pr.author === myUser) return;
     const st = D.pr_status && D.pr_status[pr.number];
     if (!st || !st.reviewers) return;
     const myReview = st.reviewers.find(r => r.user === myUser);
-
-    const isMentioned = (pr.what || '').includes('mention');
-    if (isMentioned) {
-      mentionedPRs.push(pr);
-    }
 
     if (!myReview) {
       return;
@@ -352,7 +346,6 @@ function renderPRs() {
   });
   seniorStaffPRs.sort((a, b) => (a.created || a.updated || '').localeCompare(b.created || b.updated || ''));
   approvedPRs.sort((a, b) => (a.created || a.updated || '').localeCompare(b.created || b.updated || ''));
-  mentionedPRs.sort((a, b) => (b.updated || '').localeCompare(a.updated || ''));
 
   let html = '';
 
@@ -364,11 +357,6 @@ function renderPRs() {
   if (directReviewPRs.length) {
     html += `<h3>PRs I'm Reviewing <button class="pr-comments-toggle" data-table="reviewing-prs-table">Show Comments</button></h3>`;
     html += renderPRTable(directReviewPRs, 'reviewing-prs-table');
-  }
-
-  if (mentionedPRs.length) {
-    html += `<h3>PRs I'm Mentioned In</h3>`;
-    html += renderMentionedPRTable(mentionedPRs);
   }
 
   if (seniorStaffPRs.length) {
@@ -387,7 +375,7 @@ function renderPRs() {
     html += `<h3>PRs I've Approved</h3><p class="meta">It's all good.</p>`;
   }
 
-  if (!myPRs.length && !directReviewPRs.length && !seniorStaffPRs.length && !mentionedPRs.length && !approvedPRs.length) {
+  if (!myPRs.length && !directReviewPRs.length && !seniorStaffPRs.length && !approvedPRs.length) {
     html += `<h3>PRs Needing My Attention</h3><div style="color:#6b7280;">No open PRs needing attention.</div>`;
   }
 
@@ -395,58 +383,39 @@ function renderPRs() {
 }
 
 function renderPRTable(prs, tableId) {
+  const qaTicketKeys = new Set((D.qa_contact || []).map(q => q.key));
   let html = `<table id="${tableId}"><thead><tr>`;
-  ['PR','Title','Author','Reviewers','Checks','AI Summary','Created'].forEach(h => {
+  ['PR','Title','Author','Reviewers','Checks','Status','Created'].forEach(h => {
     html += `<th>${h}<span class="sort-indicator">⇅</span><div class="resize-handle"></div></th>`;
   });
   html += `</tr></thead><tbody>`;
   prs.forEach(pr => {
     const st = (D.pr_status && D.pr_status[pr.number]) || {};
-    const reviewHtml = renderReviewers(st.reviewers);
+    const ticketMatch = (pr.title || '').match(/OCMUI-\d+/);
+    const isQAContact = ticketMatch && qaTicketKeys.has(ticketMatch[0]);
+    const reviewHtml = renderReviewers(st.reviewers, isQAContact);
     const checksHtml = renderChecksBadge(st.checks || 'unknown');
     const mergeHtml = renderMergeStatus(st.mergeable_state || '');
     const statusHtml = mergeHtml ? checksHtml + '<br>' + mergeHtml : checksHtml;
     const titleDisplay = (st.draft ? '[DRAFT] ' : '') + (pr.title || '');
-    html += `<tr><td class="nowrap">${ghLink(pr.number)}</td><td>${esc(titleDisplay)}</td><td>${esc(pr.author)}</td><td>${reviewHtml}</td><td class="nowrap">${statusHtml}</td><td class="ai-text">${esc(pr.ai_summary || pr.what || '')}</td><td>${esc(pr.created || pr.updated)}</td></tr>`;
-    const comments = (pr.comments || []).slice().sort((a, b) => (b.when || '').localeCompare(a.when || '')).slice(0, 4);
+    const badgeHtml = renderStatusBadge(pr.status_badge || '');
+    html += `<tr><td class="nowrap">${ghLink(pr.number)}</td><td>${esc(titleDisplay)}</td><td>${esc(pr.author)}</td><td>${reviewHtml}</td><td class="nowrap">${statusHtml}</td><td class="nowrap">${badgeHtml}</td><td>${esc(pr.created || pr.updated)}</td></tr>`;
+    const comments = (pr.comments || []).slice().sort((a, b) => (b.when || '').localeCompare(a.when || '')).slice(0, 10);
     html += `<tr class="pr-comments"><td></td><td colspan="6">`;
-    comments.forEach(c => { html += `<div class="pr-comment-line"><span class="comment-label">${esc(c.who)} (${esc(c.when)}):</span> "${esc(c.body)}"</div>`; });
+    if (comments.length) {
+      html += `<details><summary>Show ${comments.length} comments</summary>`;
+      comments.forEach(c => { html += `<div class="pr-comment-line"><span class="comment-label">${esc(c.who)} (${esc(c.when)}):</span> "${esc(c.body)}"</div>`; });
+      html += `</details>`;
+    }
     html += `</td></tr>`;
   });
   html += `</tbody></table>`;
   return html;
 }
 
-function renderMentionedPRTable(prs) {
-  const myUser = D.meta.github_user;
-  let html = `<table id="mentioned-prs-table" class="pr-table"><thead><tr>`;
-  ['PR','Title','Author','My Involvement','Mention'].forEach(h => {
-    html += `<th>${h}<span class="sort-indicator">⇅</span><div class="resize-handle"></div></th>`;
-  });
-  html += `</tr></thead><tbody>`;
-  prs.forEach(pr => {
-    const st = (D.pr_status && D.pr_status[pr.number]) || {};
-    const myReview = (st.reviewers || []).find(r => r.user === myUser);
-    let involvement = '';
-    if (myReview) {
-      if (myReview.state === 'approved') involvement = 'You Approved';
-      else if (['pending','commented','changes_requested'].includes(myReview.state)) involvement = 'You\'re Reviewing';
-    }
-    const summaryHtml = pr.mention_summary
-      ? `<span class="ai-diamond">◆ ${esc(pr.mention_summary)}</span>`
-      : '';
-    const rawText = pr.mention_raw || '';
-    const rawHtml = rawText
-      ? `<details style="margin-top:4px;"><summary style="cursor:pointer;color:#6b7280;font-size:0.85em;">Show raw comment</summary><pre style="white-space:pre-wrap;font-size:0.8em;margin:4px 0 0;color:#9ca3af;max-height:200px;overflow-y:auto;">${esc(rawText)}</pre></details>`
-      : '';
-    html += `<tr><td class="nowrap">${ghLink(pr.number)}</td><td>${esc(pr.title)}</td><td>${esc(pr.author)}</td><td>${involvement}</td><td>${summaryHtml}${rawHtml}</td></tr>`;
-  });
-  html += `</tbody></table>`;
-  return html;
-}
-
-function renderReviewers(reviewers) {
+function renderReviewers(reviewers, isQAContact) {
   if (!reviewers || !reviewers.length) return `<span style="color:#6b7280;">—</span>`;
+  const myUser = D.meta.github_user;
   const stateMap = {
     approved: {icon: '✓', color: '#22c55e'},
     changes_requested: {icon: '✗', color: '#ef4444'},
@@ -456,7 +425,8 @@ function renderReviewers(reviewers) {
   return `<span class="reviewer-line">` + reviewers.map(r => {
     const s = stateMap[r.state] || stateMap.pending;
     const displayName = r.via_team ? r.via_team.replace(/-/g, ' ') : r.user;
-    return `<span style="color:${s.color};white-space:nowrap;" title="${r.via_team ? 'via team: ' + r.via_team : r.state}">${s.icon} ${esc(displayName)}</span>`;
+    const qaIcon = (isQAContact && r.user === myUser) ? '<span title="QA Contact" style="margin-left:2px;">🧪</span>' : '';
+    return `<span style="color:${s.color};white-space:nowrap;" title="${r.via_team ? 'via team: ' + r.via_team : r.state}">${s.icon} ${esc(displayName)}</span>${qaIcon}`;
   }).join(' &nbsp;') + `</span>`;
 }
 
@@ -465,6 +435,15 @@ function renderChecksBadge(status) {
   if (status === 'failing') return `<span style="color:#ef4444;">● failing</span>`;
   if (status === 'pending') return `<span style="color:#f59e0b;">● pending</span>`;
   return `<span style="color:#6b7280;">—</span>`;
+}
+function renderStatusBadge(badge) {
+  if (!badge) return '';
+  let color = '#6b7280';
+  if (/^Changes requested/.test(badge)) color = '#f59e0b';
+  else if (badge === 'Needs your re-review' || badge === 'New activity since approval') color = '#ef4444';
+  else if (badge === 'Awaiting author' || badge === 'Awaiting review') color = '#f59e0b';
+  else if (badge === 'Approved' || /^\d+ approved$/.test(badge)) color = '#22c55e';
+  return `<span style="color:${color};font-weight:600;font-size:0.85em;">${esc(badge)}</span>`;
 }
 function renderMergeStatus(state) {
   if (state === 'clean') return `<span style="color:#22c55e;" title="Ready to merge">✓ mergeable</span>`;
@@ -479,12 +458,13 @@ function renderRetroItems() {
   if (!retros.length) return '<p class="meta">No retro action items found.</p>';
 
   let html = `<table id="retro-items-table" class="pr-table"><thead><tr>`;
-  ['Action','Sprint','Age','AI Summary'].forEach(h => {
+  ['#','Action','Sprint','Age','AI Summary'].forEach(h => {
     html += `<th>${h}<span class="sort-indicator">⇅</span><div class="resize-handle"></div></th>`;
   });
   html += `</tr></thead><tbody>`;
 
-  for (const item of retros) {
+  for (let idx = 0; idx < retros.length; idx++) {
+    const item = retros[idx];
     const age = item.date ? (() => {
       const d = new Date(item.date);
       const days = Math.floor((new Date() - d) / 86400000);
@@ -496,6 +476,7 @@ function renderRetroItems() {
     })() : (item.age || '');
     const aiDiamond = item.ai_summary ? `<span class="ai-diamond" title="${item.ai_summary.replace(/"/g,'&quot;')}">◆ ${item.ai_summary}</span>` : '';
     html += `<tr>
+      <td class="nowrap">${idx + 1}</td>
       <td>${item.text}</td>
       <td>${item.sprint || ''}</td>
       <td>${age}</td>
@@ -515,6 +496,32 @@ function formatActionText(text) {
   return `${main}<ul style="margin:4px 0 0 16px; padding:0; list-style:disc;">${listItems}</ul>`;
 }
 
+function renderQAContact() {
+  const items = D.qa_contact || [];
+  let html = `<h3>JIRAs I'm QA Contact</h3>`;
+  if (!items.length) return html + `<p class="meta">It's all good.</p>`;
+  html += `<table id="qa-contact-table" class="pr-table"><thead><tr>`;
+  ['#','Ticket','Summary','Type','Status','Assignee','Priority','Updated'].forEach(h => {
+    html += `<th>${h}<span class="sort-indicator">⇅</span><div class="resize-handle"></div></th>`;
+  });
+  html += `</tr></thead><tbody>`;
+  items.forEach((item, idx) => {
+    const url = `https://redhat.atlassian.net/browse/${item.key}`;
+    html += `<tr>
+      <td class="nowrap">${idx + 1}</td>
+      <td class="nowrap"><a href="${url}" target="_blank">${item.key}</a></td>
+      <td>${esc(item.summary)}</td>
+      <td>${esc(item.type || '')}</td>
+      <td>${esc(item.status)}</td>
+      <td>${esc(item.assignee)}</td>
+      <td>${esc(item.priority || '')}</td>
+      <td class="nowrap">${item.updated || ''}</td>
+    </tr>`;
+  });
+  html += '</tbody></table>';
+  return html;
+}
+
 function renderJiraMentions() {
   const dismissed = D.dismissed_jira_mentions || [];
   const items = (D.jira_mentions || []).filter(i => !dismissed.includes(i.key));
@@ -530,7 +537,7 @@ function renderJiraMentions() {
     const aiDiamond = item.ai_summary ? `<span class="ai-diamond">◆ ${esc(item.ai_summary)}</span><br>` : '';
     const mentionText = item.mention_text || '';
     const commentHtml = mentionText
-      ? `${aiDiamond}<details style="margin-top:4px;"><summary style="cursor:pointer;color:#6b7280;font-size:0.85em;">Show comment</summary><pre style="white-space:pre-wrap;font-size:0.8em;margin:4px 0 0;color:#9ca3af;max-height:200px;overflow-y:auto;">${esc(mentionText)}</pre></details>`
+      ? `${aiDiamond}<details open style="margin-top:4px;"><summary style="cursor:pointer;color:#6b7280;font-size:0.85em;">Show comment</summary><pre style="white-space:pre-wrap;font-size:0.8em;margin:4px 0 0;color:#9ca3af;max-height:200px;overflow-y:auto;">${esc(mentionText)}</pre></details>`
       : aiDiamond;
     html += `<tr>
       <td class="nowrap"><a href="${url}" target="_blank">${item.key}</a></td>
@@ -571,11 +578,12 @@ function renderActionItems() {
     if (!groupItems.length) return '';
     let html = groupLabel ? `<h4 style="margin:12px 0 6px;">${groupLabel}</h4>` : '';
     html += `<table id="${tableId}" class="pr-table"><thead><tr>`;
-    ['Action','Source','Date','Age','AI Summary'].forEach(h => {
+    ['#','Action','Source','Date','Age','AI Summary'].forEach(h => {
       html += `<th>${h}<span class="sort-indicator">⇅</span><div class="resize-handle"></div></th>`;
     });
     html += `</tr></thead><tbody>`;
-    for (const item of groupItems) {
+    for (let idx = 0; idx < groupItems.length; idx++) {
+      const item = groupItems[idx];
       const anchor = item.heading_id ? `#heading=${item.heading_id}` : '';
       const docUrl = `https://docs.google.com/document/d/${item.doc_id}/edit${anchor}`;
       const textStyle = item.completed ? 'text-decoration:line-through; opacity:0.6;' : '';
@@ -583,6 +591,7 @@ function renderActionItems() {
       const aiDiamond = item.ai_summary ? `<span class="ai-diamond" title="${item.ai_summary.replace(/"/g,'&quot;')}">◆ ${item.ai_summary}</span>` : '';
       const actionHtml = formatActionText(item.text);
       html += `<tr>
+        <td class="nowrap">${idx + 1}</td>
         <td style="${textStyle}">${actionHtml}</td>
         <td><a href="${docUrl}" target="_blank">${item.doc_name}</a></td>
         <td>${item.date || ''}</td>
@@ -603,6 +612,29 @@ function renderActionItems() {
   }
   html += `<h3>Retro Items</h3>`;
   html += renderRetroItems();
+  html += `<h3>Jira</h3>`;
+  html += renderJiraActionItems();
+  return html;
+}
+
+function renderJiraActionItems() {
+  const items = D.jira_action_items || [];
+  if (!items.length) return '<p class="meta">No Jira action items found.</p>';
+  let html = `<table id="jira-action-items-table" class="pr-table"><thead><tr>`;
+  ['#','Action','Ticket','Source','Date'].forEach(h => {
+    html += `<th>${h}<span class="sort-indicator">⇅</span><div class="resize-handle"></div></th>`;
+  });
+  html += `</tr></thead><tbody>`;
+  items.forEach((item, idx) => {
+    html += `<tr>
+      <td class="nowrap">${idx + 1}</td>
+      <td>${esc(item.text)}</td>
+      <td class="nowrap"><a href="${item.url}" target="_blank">${esc(item.key)}</a></td>
+      <td>${esc(item.source)}</td>
+      <td class="nowrap">${item.date || ''}</td>
+    </tr>`;
+  });
+  html += '</tbody></table>';
   return html;
 }
 
@@ -613,6 +645,7 @@ function renderPage() {
   let html = `<h1>Activity Monitor for Dave Taylor</h1><div class="meta">Data fetched: ${ts} &nbsp;|&nbsp; AI summaries: ${aiTs}</div>`;
   html += `<h2>Jira</h2><div class="section-content">`;
   html += renderEpicsTable();
+  html += renderQAContact();
   html += renderJiraMentions();
   html += `</div>`;
   html += `<h2>GitHub</h2><div class="section-content">`;

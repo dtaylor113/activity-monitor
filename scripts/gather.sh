@@ -32,13 +32,20 @@ fi
 
 # --- Validate Jira token is working ---
 JIRA_AUTH_CHECK=$(curl -s -o /dev/null -w "%{http_code}" -u "$JIRA_EMAIL:$JIRA_TOKEN" "https://${JIRA_INSTANCE}/rest/api/3/myself")
+JIRA_OK=true
 if [[ "$JIRA_AUTH_CHECK" != "200" ]]; then
-  echo "ERROR: Jira authentication failed (HTTP $JIRA_AUTH_CHECK)." >&2
+  echo "WARNING: Jira authentication failed (HTTP $JIRA_AUTH_CHECK). Jira sections will be empty." >&2
   echo "Your JIRA_TOKEN may have expired. Generate a new one at:" >&2
   echo "  https://id.atlassian.com/manage-profile/security/api-tokens" >&2
   echo "Then update ~/ocmui-tokens.sh and re-source it." >&2
-  exit 1
+  JIRA_OK=false
 fi
+
+jira_skip() {
+  # Output an empty section placeholder when Jira is unavailable
+  echo "[]"
+  echo ""
+}
 
 REPO="$GITHUB_REPO"
 
@@ -62,6 +69,7 @@ echo ""
 # --- Section 1: ALL active epics with current fields + last 3 comments ---
 # Uses 'comment' field to get comments inline (1 API call instead of N+1)
 echo "### SECTION: ALL_EPICS"
+if ! $JIRA_OK; then jira_skip; else
 curl -s -u "$JIRA_EMAIL:$JIRA_TOKEN" \
   "https://${JIRA_INSTANCE}/rest/api/3/search/jql" \
   -G \
@@ -158,10 +166,12 @@ for issue in data.get('issues', []):
 print(json.dumps(results, indent=2))
 "
 echo ""
+fi # end ALL_EPICS jira guard
 
 # --- Section 1b: Parent epic/feature date drift and status changes ---
 # Fetches ALL active OCMUI epics (not just recently updated) to check parent alignment
 echo "### SECTION: PARENT_EPIC_STATUS"
+if ! $JIRA_OK; then jira_skip; else
 curl -s -u "$JIRA_EMAIL:$JIRA_TOKEN" \
   "https://${JIRA_INSTANCE}/rest/api/3/search/jql" \
   -G \
@@ -351,9 +361,11 @@ for epic in epics_with_parents:
 print(json.dumps(results, indent=2))
 "
 echo ""
+fi # end PARENT_EPIC_STATUS jira guard
 
 # --- Section 1c: Open child stories for each active epic ---
 echo "### SECTION: EPIC_CHILDREN"
+if ! $JIRA_OK; then echo "{}"; echo ""; else
 curl -s -u "$JIRA_EMAIL:$JIRA_TOKEN" \
   "https://${JIRA_INSTANCE}/rest/api/3/search/jql" \
   -G \
@@ -438,6 +450,7 @@ for epic_key in epic_keys:
 print(json.dumps(results, indent=2))
 "
 echo ""
+fi # end EPIC_CHILDREN jira guard
 
 # Pre-fetch the current user's team slugs (cached for all PR sections)
 # Uses GITHUB_TOKEN="" to prefer keyring token which has read:org scope
@@ -457,9 +470,13 @@ print(json.dumps(sorted(teams)))
 SENIOR_STAFF=$(GITHUB_TOKEN="" gh api "orgs/RedHatInsights/teams/uhc-portal-senior-staff/members" --jq '[.[].login]' 2>/dev/null)
 [[ -z "$SENIOR_STAFF" ]] && SENIOR_STAFF="[]"
 export SENIOR_STAFF
+echo "### SECTION: SENIOR_STAFF"
+echo "$SENIOR_STAFF"
+echo ""
 
 # --- Section 1d: PR lookup for child tickets in Code Review/Review ---
 echo "### SECTION: CHILD_PR_STATUS"
+if ! $JIRA_OK; then echo "{}"; echo ""; else
 # Collect child ticket keys in Code Review or Review from the EPIC_CHILDREN output,
 # then look up their corresponding GitHub PRs
 curl -s -u "$JIRA_EMAIL:$JIRA_TOKEN" \
@@ -685,9 +702,11 @@ for key in child_keys:
 print(json.dumps(results, indent=2))
 "
 echo ""
+fi # end CHILD_PR_STATUS jira guard
 
 # --- Section 1e: Siblings — open children of each epic's parent (non-OCMUI) ---
 echo "### SECTION: SIBLINGS"
+if ! $JIRA_OK; then echo "{}"; echo ""; else
 curl -s -u "$JIRA_EMAIL:$JIRA_TOKEN" \
   "https://${JIRA_INSTANCE}/rest/api/3/search/jql" \
   -G \
@@ -797,6 +816,7 @@ for epic_key, parent_key in epic_parents.items():
 print(json.dumps(results, indent=2))
 "
 echo ""
+fi # end SIBLINGS jira guard
 
 # --- Section 2: PRs involving me (recent activity) ---
 echo "### SECTION: PR_ACTIVITY"
@@ -838,16 +858,6 @@ APPROVED_REVIEW_NUMS=$(echo "$APPROVED_REVIEWS_JSON" | python3 -c "import sys,js
 MY_PR_NUMS=$(gh pr list --repo "$REPO" --author "$GITHUB_USER" --state open --json number --jq '.[].number' 2>/dev/null)
 echo ""
 
-# --- Section 3c: PRs where I was @mentioned in comments ---
-echo "### SECTION: MENTIONS"
-MENTIONS_JSON=$(gh api --method GET search/issues \
-  -f "q=repo:${REPO} is:pr is:open mentions:${GITHUB_USER} -author:${GITHUB_USER}" \
-  -F per_page=10 \
-  --jq '[.items[] | {number, title: .title, author: .user.login, updated_at, created_at}]' 2>/dev/null || echo "[]")
-echo "$MENTIONS_JSON"
-MENTION_NUMS=$(echo "$MENTIONS_JSON" | python3 -c "import sys,json; print(' '.join(str(p['number']) for p in json.load(sys.stdin)))" 2>/dev/null)
-echo ""
-
 # --- Section 3d: My open PRs (always include regardless of activity) ---
 echo "### SECTION: MY_OPEN_PRS"
 gh pr list --repo "$REPO" --author "$GITHUB_USER" --state open --json number,title,updatedAt,createdAt,isDraft \
@@ -857,7 +867,7 @@ echo ""
 # --- Section 4: Last 3 human comments for all PRs needing attention ---
 # Reuses PR numbers collected from earlier sections (avoid duplicate API calls)
 echo "### SECTION: PR_COMMENTS"
-ALL_PR_NUMS=$(echo "$REVIEW_REQUEST_NUMS $STALE_REVIEW_NUMS $APPROVED_REVIEW_NUMS $MY_PR_NUMS $MENTION_NUMS" | tr ' ' '\n' | sort -un | tr '\n' ' ')
+ALL_PR_NUMS=$(echo "$REVIEW_REQUEST_NUMS $STALE_REVIEW_NUMS $APPROVED_REVIEW_NUMS $MY_PR_NUMS" | tr ' ' '\n' | sort -un | tr '\n' ' ')
 
 BOTS="codecov|coderabbitai|github-actions|dependabot"
 echo "["
@@ -900,8 +910,6 @@ if r.returncode == 0 and r.stdout.strip():
     gql = json.loads(r.stdout)
     threads = gql.get('data',{}).get('repository',{}).get('pullRequest',{}).get('reviewThreads',{}).get('nodes',[])
     for thread in threads:
-        if thread.get('isResolved'):
-            continue
         comments = thread.get('comments',{}).get('nodes',[])
         for c in comments:
             author = c.get('author',{}).get('login','')
@@ -911,10 +919,31 @@ if r.returncode == 0 and r.stdout.strip():
                 'updated_at': c.get('createdAt','')[:10]
             })
 
-# Filter bots, sort by date, take last 8
+# Review body text (formal review submissions with non-empty body)
+r = subprocess.run(['gh', 'api', f'repos/{repo}/pulls/{pr_num}/reviews',
+    '--jq', '[.[] | select(.body != null and .body != \"\") | {user: .user.login, body: .body[:1000], updated_at: .submitted_at, state: .state}]'],
+    capture_output=True, text=True, timeout=15)
+if r.returncode == 0 and r.stdout.strip():
+    reviews = json.loads(r.stdout)
+    for rev in reviews:
+        if rev.get('user') in bots:
+            continue
+        state = rev.get('state', '')
+        prefix = ''
+        if state == 'CHANGES_REQUESTED':
+            prefix = '[Changes Requested] '
+        elif state == 'APPROVED':
+            prefix = '[Approved] '
+        all_comments.append({
+            'user': rev['user'],
+            'body': prefix + rev.get('body', '')[:800],
+            'updated_at': (rev.get('updated_at') or '')[:10]
+        })
+
+# Filter bots, sort by date, take last 15
 all_comments = [c for c in all_comments if c.get('user') not in bots]
 all_comments.sort(key=lambda c: c.get('updated_at', ''))
-all_comments = all_comments[-8:]
+all_comments = all_comments[-15:]
 
 # Add pr number
 for c in all_comments:
@@ -931,22 +960,6 @@ done
 echo "]"
 echo ""
 
-# --- Section 4a: Full @mention comments for mentioned PRs ---
-echo "### SECTION: MENTION_COMMENTS"
-echo "{"
-FIRST=true
-for PR_NUM in $MENTION_NUMS; do
-  [[ -z "$PR_NUM" ]] && continue
-  MENTION_BODY=$(gh api "repos/${REPO}/issues/${PR_NUM}/comments" \
-    --jq "[.[] | select(.body | contains(\"@${GITHUB_USER}\")) | {user: .user.login, body: .body, created_at: .created_at}]" 2>/dev/null || echo "[]")
-  if [[ -n "$MENTION_BODY" && "$MENTION_BODY" != "[]" ]]; then
-    if [[ "$FIRST" == "true" ]]; then FIRST=false; else echo ","; fi
-    echo "\"${PR_NUM}\": ${MENTION_BODY}"
-  fi
-done
-echo "}"
-echo ""
-
 # --- Section 4b: PR reviews and checks status for all PRs ---
 echo "### SECTION: PR_STATUS"
 echo "{"
@@ -961,14 +974,15 @@ repo = '${REPO}'
 github_user = os.environ['GITHUB_USER']
 my_teams = json.loads('${MY_TEAMS}')
 
-# Get PR author + requested reviewers + requested teams + mergeable state
+# Get PR author + requested reviewers + requested teams + mergeable state + head SHA
 pr_author = ''
 mergeable_state = 'unknown'
 requested = []
 requested_teams = []
 is_draft = False
+head_sha = ''
 try:
-    r = subprocess.run(['gh', 'api', f'repos/{repo}/pulls/{pr_num}', '--jq', '{author: .user.login, requested: [.requested_reviewers[].login], requested_teams: [.requested_teams[].slug], mergeable_state: .mergeable_state, draft: .draft}'], capture_output=True, text=True, timeout=15)
+    r = subprocess.run(['gh', 'api', f'repos/{repo}/pulls/{pr_num}', '--jq', '{author: .user.login, requested: [.requested_reviewers[].login], requested_teams: [.requested_teams[].slug], mergeable_state: .mergeable_state, draft: .draft, head_sha: .head.sha}'], capture_output=True, text=True, timeout=15)
     if r.returncode == 0 and r.stdout.strip():
         pr_data = json.loads(r.stdout)
         pr_author = pr_data.get('author', '')
@@ -976,12 +990,14 @@ try:
         requested_teams = pr_data.get('requested_teams', [])
         mergeable_state = pr_data.get('mergeable_state', 'unknown')
         is_draft = pr_data.get('draft', False)
+        head_sha = pr_data.get('head_sha', '')
 except: pass
 
 # Reviews — paginate to get ALL reviews, last meaningful state per user wins
 reviewers = []
+my_last_review_at = ''
 try:
-    r = subprocess.run(['gh', 'api', '--paginate', f'repos/{repo}/pulls/{pr_num}/reviews', '--jq', '[.[] | {state: .state, user: .user.login}]'], capture_output=True, text=True, timeout=30)
+    r = subprocess.run(['gh', 'api', '--paginate', f'repos/{repo}/pulls/{pr_num}/reviews', '--jq', '[.[] | {state: .state, user: .user.login, submitted_at: .submitted_at}]'], capture_output=True, text=True, timeout=30)
     if r.returncode == 0 and r.stdout.strip():
         raw = r.stdout.strip()
         reviews = []
@@ -1003,6 +1019,8 @@ try:
                     reviewer_state[user] = 'COMMENTED'
             elif state == 'DISMISSED':
                 reviewer_state[user] = 'COMMENTED'
+            if user == github_user and rev.get('submitted_at'):
+                my_last_review_at = rev['submitted_at']
         for user, state in reviewer_state.items():
             reviewers.append({'user': user, 'state': state.lower()})
 except: pass
@@ -1042,7 +1060,7 @@ try:
         elif ck.get('success', 0) > 0: checks_status = 'passing'
 except: pass
 
-print(json.dumps({'reviewers': reviewers, 'checks': checks_status, 'mergeable_state': mergeable_state, 'draft': is_draft}))
+print(json.dumps({'reviewers': reviewers, 'checks': checks_status, 'mergeable_state': mergeable_state, 'draft': is_draft, 'head_sha': head_sha, 'my_last_review_at': my_last_review_at}))
 " 2>/dev/null)
   if [[ -n "$STATUS" ]]; then
     if [[ "$FIRST" == "true" ]]; then FIRST=false; else echo ","; fi
@@ -1054,6 +1072,7 @@ echo ""
 
 # --- Section 5: Jira tickets I'm involved in (recent changes) ---
 echo "### SECTION: JIRA_TICKET_ACTIVITY"
+if ! $JIRA_OK; then jira_skip; else
 curl -s -u "$JIRA_EMAIL:$JIRA_TOKEN" \
   "https://${JIRA_INSTANCE}/rest/api/3/search/jql" \
   -G \
@@ -1103,16 +1122,48 @@ for issue in data.get('issues', []):
 print(json.dumps(results, indent=2))
 "
 echo ""
+fi # end JIRA_TICKET_ACTIVITY jira guard
+
+# --- Section 5b: Jira tickets where I'm QA Contact ---
+echo "### SECTION: QA_CONTACT"
+if ! $JIRA_OK; then jira_skip; else
+curl -s -u "$JIRA_EMAIL:$JIRA_TOKEN" \
+  -X POST "https://${JIRA_INSTANCE}/rest/api/3/search/jql" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"jql\": \"\\\"QA Contact\\\" = currentUser() AND status not in (Done, Closed) ORDER BY updated DESC\",
+    \"fields\": [\"key\",\"summary\",\"status\",\"assignee\",\"issuetype\",\"priority\",\"updated\"],
+    \"maxResults\": 30
+  }" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+results = []
+for issue in data.get('issues', []):
+    f = issue.get('fields', {})
+    results.append({
+        'key': issue['key'],
+        'summary': f.get('summary', '')[:100],
+        'status': f.get('status', {}).get('name', ''),
+        'assignee': (f.get('assignee') or {}).get('displayName', 'Unassigned'),
+        'type': f.get('issuetype', {}).get('name', ''),
+        'priority': f.get('priority', {}).get('name', ''),
+        'updated': (f.get('updated') or '')[:10]
+    })
+print(json.dumps(results, indent=2))
+"
+echo ""
+fi # end QA_CONTACT jira guard
 
 # --- Section 6: Jira tickets where I was @mentioned (last 1 month, unanswered) ---
 echo "### SECTION: JIRA_MENTIONS"
+if ! $JIRA_OK; then jira_skip; else
 MY_JIRA_ACCOUNT_ID=$(curl -s -u "$JIRA_EMAIL:$JIRA_TOKEN" "https://${JIRA_INSTANCE}/rest/api/3/myself" | python3 -c "import sys,json; print(json.load(sys.stdin).get('accountId',''))" 2>/dev/null)
 curl -s -u "$JIRA_EMAIL:$JIRA_TOKEN" \
   "https://${JIRA_INSTANCE}/rest/api/3/search/jql" \
   -G \
-  --data-urlencode "jql=project = ${JIRA_PROJECT} AND status not in (Done, Closed) AND updated >= -4w AND assignee != currentUser() AND reporter != currentUser() ORDER BY updated DESC" \
+  --data-urlencode "jql=project = ${JIRA_PROJECT} AND status not in (Done, Closed) AND updated >= -4w AND (assignee is EMPTY OR assignee != currentUser()) AND reporter != currentUser() ORDER BY updated DESC" \
   --data-urlencode "fields=key,summary,status,assignee,updated,comment" \
-  --data-urlencode "maxResults=50" | python3 -c "
+  --data-urlencode "maxResults=100" | python3 -c "
 import sys, json
 from datetime import datetime, timedelta, timezone
 
@@ -1215,10 +1266,101 @@ for issue in issues:
 print(json.dumps(mentioned_in, indent=2))
 "
 echo ""
+fi # end JIRA_MENTIONS jira guard
 
 # ─── ACTION ITEMS FROM GOOGLE DOCS ───────────────────────────────────
 echo "### SECTION: ACTION_ITEMS"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 bash "$SCRIPT_DIR/gather-actions.sh" 2>/dev/null || echo "[]"
 echo ""
+
+# ─── ACTION ITEMS FROM JIRA (description or comments containing action item tags) ───
+echo "### SECTION: JIRA_ACTION_ITEMS"
+if ! $JIRA_OK; then jira_skip; else
+ACTION_ITEM_NAME="${ACTION_ITEM_NAME:-Dave}"
+curl -s -u "$JIRA_EMAIL:$JIRA_TOKEN" \
+  "https://${JIRA_INSTANCE}/rest/api/3/search/jql" \
+  -G \
+  --data-urlencode "jql=project = ${JIRA_PROJECT} AND (description ~ \"Action Item ${ACTION_ITEM_NAME}\" OR comment ~ \"Action Item ${ACTION_ITEM_NAME}\") AND updated >= -1w ORDER BY updated DESC" \
+  --data-urlencode "fields=key,summary,status,description,comment,updated,created" \
+  --data-urlencode "maxResults=20" | python3 -c "
+import sys, json, re
+
+ACTION_NAME = '${ACTION_ITEM_NAME}'
+PATTERNS = [
+    re.compile(r'\[' + ACTION_NAME + r'\s+Action\s+Item\]', re.IGNORECASE),
+    re.compile(r'\[Action\s+Item\s+' + ACTION_NAME + r'\]', re.IGNORECASE),
+    re.compile(ACTION_NAME + r':\s*Action\s+Item', re.IGNORECASE),
+]
+
+def extract_text(node):
+    if isinstance(node, dict):
+        t = node.get('type', '')
+        if t == 'text':
+            return node.get('text', '')
+        if t == 'hardBreak':
+            return '\n'
+        if t in ('paragraph', 'heading', 'bulletList', 'listItem', 'orderedList'):
+            content = node.get('content', [])
+            inner = ''.join(extract_text(c) for c in content)
+            return inner + '\n'
+        parts = []
+        for v in node.values():
+            parts.append(extract_text(v))
+        return ''.join(parts)
+    elif isinstance(node, list):
+        return ''.join(extract_text(item) for item in node)
+    return ''
+
+def find_action_lines(text):
+    results = []
+    for line in text.split('\n'):
+        for pat in PATTERNS:
+            if pat.search(line):
+                results.append(line.strip())
+                break
+    return results
+
+data = json.load(sys.stdin)
+items = []
+
+for issue in data.get('issues', []):
+    key = issue['key']
+    fields = issue.get('fields', {})
+    summary = fields.get('summary', '')
+    
+    # Check description
+    desc_adf = fields.get('description') or {}
+    desc_text = extract_text(desc_adf)
+    desc_actions = find_action_lines(desc_text)
+    for action in desc_actions:
+        items.append({
+            'key': key,
+            'summary': summary[:80],
+            'text': action,
+            'source': 'description',
+            'date': (fields.get('updated') or fields.get('created') or '')[:10],
+            'url': f'https://redhat.atlassian.net/browse/{key}'
+        })
+    
+    # Check comments
+    comment_data = fields.get('comment', {})
+    comments = comment_data.get('comments', []) if isinstance(comment_data, dict) else []
+    for c in comments:
+        c_text = extract_text(c.get('body', {}))
+        c_actions = find_action_lines(c_text)
+        for action in c_actions:
+            items.append({
+                'key': key,
+                'summary': summary[:80],
+                'text': action,
+                'source': 'comment',
+                'date': (c.get('created') or '')[:10],
+                'url': f'https://redhat.atlassian.net/browse/{key}?focusedId={c.get(\"id\",\"\")}&page=com.atlassian.jira.plugin.system.issuetabpanels%3Acomment-tabpanel#comment-{c.get(\"id\",\"\")}'
+            })
+
+print(json.dumps(items, indent=2))
+"
+echo ""
+fi # end JIRA_ACTION_ITEMS jira guard
 echo "=== END ==="

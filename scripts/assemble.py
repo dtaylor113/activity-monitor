@@ -35,6 +35,99 @@ def parse_json_safe(content, default=None):
             return default if default is not None else {}
 
 
+def age_label(date_str):
+    """Return a human-readable age label like '@ 3 days ago'."""
+    if not date_str:
+        return ''
+    try:
+        d = datetime.strptime(date_str[:10], '%Y-%m-%d').date()
+    except (ValueError, TypeError):
+        return ''
+    days = (date.today() - d).days
+    if days <= 0:
+        return '@ today'
+    if days == 1:
+        return '@ 1 day ago'
+    if days < 14:
+        return f'@ {days} days ago'
+    if days < 60:
+        return f'@ ~{days // 7} weeks ago'
+    return f'@ ~{days // 30} months ago'
+
+
+def generate_pr_status_badge(pr, pr_st, github_user):
+    """Generate a compact status badge for a PR.
+
+    Returns a short string indicating the ball-in-court status:
+    - "Changes requested by {user}" — another reviewer requested changes, awaiting author
+    - "Awaiting author" — you requested changes or commented last, author hasn't replied
+    - "Needs your re-review" — author pushed or replied after changes were requested
+    - "New activity since approval" — user approved but new comments appeared
+    - "Approved" — user approved, no new activity since
+    - "Pending" — user hasn't reviewed yet
+    """
+    comments = pr.get('comments', [])
+    reviewers = pr_st.get('reviewers', []) if pr_st else []
+    author = pr.get('author', '')
+    is_mine = pr.get('is_mine', False) or author == github_user
+    head_sha = pr_st.get('head_sha', '') if pr_st else ''
+    my_last_review_at = pr_st.get('my_last_review_at', '') if pr_st else ''
+
+    if is_mine:
+        pending = [r for r in reviewers if r.get('state') == 'pending']
+        approved = [r for r in reviewers if r.get('state') == 'approved']
+        changes_req = [r for r in reviewers if r.get('state') == 'changes_requested']
+        if changes_req:
+            names = ', '.join(r['user'] for r in changes_req)
+            return f'Changes requested by {names}' if len(changes_req) == 1 else 'Changes requested'
+        if approved:
+            return f'{len(approved)} approved'
+        if pending:
+            return 'Awaiting review'
+        if not reviewers:
+            return 'No reviewers'
+        return ''
+
+    my_review = next((r for r in reviewers if r.get('user') == github_user), None)
+    my_state = (my_review or {}).get('state', 'pending')
+
+    non_bot_comments = [c for c in comments if c.get('who', '') not in
+                        {'coderabbitai[bot]', 'codecov[bot]', 'sourcery-ai[bot]'}]
+
+    others_cr = [r for r in reviewers if r.get('state') == 'changes_requested' and r.get('user') != github_user]
+    author_replied_last = non_bot_comments and non_bot_comments[0].get('who', '') == author
+
+    if my_state == 'approved':
+        if my_last_review_at and non_bot_comments:
+            latest_comment = non_bot_comments[0]
+            if latest_comment.get('when', '') > my_last_review_at[:10] and latest_comment.get('who', '') != github_user:
+                if author_replied_last:
+                    return 'Needs your re-review'
+                return 'New activity since approval'
+        return 'Approved'
+
+    if my_state == 'changes_requested':
+        if author_replied_last:
+            return 'Needs your re-review'
+        return 'Awaiting author'
+
+    # pending or commented — check if another reviewer's changes_requested is blocking
+    if others_cr and not author_replied_last:
+        names = ', '.join(r['user'] for r in others_cr)
+        return f'Changes requested by {names}'
+
+    if my_state == 'commented':
+        if non_bot_comments:
+            latest = non_bot_comments[0]
+            if latest.get('who', '') == github_user:
+                return 'Awaiting author'
+            if author_replied_last:
+                return 'Needs your re-review'
+        return 'Pending'
+
+    return 'Pending'
+
+
 def load_previous_ai(output_dir):
     """Load AI summary fields from existing activity-data.js."""
     path = os.path.join(output_dir, 'activity-data.js')
@@ -63,7 +156,6 @@ def assemble(raw, output_dir):
     review_requests = json.loads(extract_section(raw, 'REVIEW_REQUESTS') or '[]')
     stale_reviews = json.loads(extract_section(raw, 'STALE_REVIEWS') or '[]')
     approved_reviews = json.loads(extract_section(raw, 'APPROVED_REVIEWS') or '[]')
-    mentions = json.loads(extract_section(raw, 'MENTIONS') or '[]')
     my_open_prs = json.loads(extract_section(raw, 'MY_OPEN_PRS') or '[]')
     pr_status = parse_json_safe(extract_section(raw, 'PR_STATUS'), {})
     jta_raw = extract_section(raw, 'JIRA_TICKET_ACTIVITY')
@@ -72,8 +164,14 @@ def assemble(raw, output_dir):
     action_items_raw = extract_section(raw, 'ACTION_ITEMS')
     action_items = json.loads(action_items_raw) if action_items_raw else []
 
+    jira_action_items_raw = extract_section(raw, 'JIRA_ACTION_ITEMS')
+    jira_action_items = json.loads(jira_action_items_raw) if jira_action_items_raw else []
+
     jira_mentions_raw = extract_section(raw, 'JIRA_MENTIONS')
     jira_mentions = json.loads(jira_mentions_raw) if jira_mentions_raw else []
+
+    qa_contact_raw = extract_section(raw, 'QA_CONTACT')
+    qa_contact = json.loads(qa_contact_raw) if qa_contact_raw else []
 
     pc_raw = extract_section(raw, 'PR_COMMENTS')
     pr_comments_flat = []
@@ -134,19 +232,6 @@ def assemble(raw, output_dir):
             entry = pr_map[pr['number']]
             if 'stale' not in entry.get('what', ''):
                 entry['what'] = ('stale review, ' + entry.get('what', '')).strip(', ')
-    for pr in mentions:
-        if pr['number'] not in pr_map:
-            pr_map[pr['number']] = {
-                'number': pr['number'], 'title': pr['title'], 'author': pr['author'],
-                'is_mine': False, 'updated': pr['updated_at'][:10],
-                'created': (pr.get('created_at') or '')[:10],
-                'what': 'mentioned', 'comments': []
-            }
-        else:
-            entry = pr_map[pr['number']]
-            if 'mention' not in entry.get('what', ''):
-                entry['what'] = (entry.get('what', '') + ', mentioned').strip(', ')
-
     # Group PR comments
     pr_comments_by_num = {}
     for c in pr_comments_flat:
@@ -157,33 +242,11 @@ def assemble(raw, output_dir):
             pr_comments_by_num.setdefault(num, []).append({
                 'who': c.get('user', ''),
                 'when': c.get('updated_at', '')[:10],
-                'body': c.get('body', '')[:200]
+                'body': c.get('body', '')[:500]
             })
     for num, comments in pr_comments_by_num.items():
         if num in pr_map:
-            pr_map[num]['comments'] = sorted(comments, key=lambda x: x['when'], reverse=True)[:8]
-
-    # Populate mention_raw for mentioned PRs using MENTION_COMMENTS section
-    mention_comments_raw = extract_section(raw, 'MENTION_COMMENTS')
-    mention_comments = parse_json_safe(mention_comments_raw, {})
-    for num, entry in pr_map.items():
-        if 'mention' not in entry.get('what', ''):
-            continue
-        entry.setdefault('mention_summary', '')
-        entry.setdefault('mention_raw', '')
-        mc_list = mention_comments.get(str(num), [])
-        if isinstance(mc_list, dict):
-            mc_list = [mc_list]
-        # Find most recent comment where @user appears in non-quoted text
-        for mc in sorted(mc_list, key=lambda x: x.get('created_at', ''), reverse=True):
-            body = mc.get('body', '')
-            non_quoted = '\n'.join(l for l in body.split('\n') if not l.strip().startswith('>'))
-            if f'@{github_user}' in non_quoted:
-                lines = [l for l in body.split('\n') if not l.strip().startswith('>')]
-                meaningful = [l for l in lines if l.strip()]
-                tail = meaningful[-10:] if len(meaningful) > 10 else meaningful
-                entry['mention_raw'] = '\n'.join(tail)
-                break
+            pr_map[num]['comments'] = sorted(comments, key=lambda x: x['when'], reverse=True)[:12]
 
     # Add approved PRs that aren't already in pr_map
     for pr in approved_reviews:
@@ -206,7 +269,7 @@ def assemble(raw, output_dir):
             cpr['reviewers'] = [r for r in cpr.get('reviewers', []) if r['user'] not in bot_users]
 
     # Assemble data
-    senior_staff = json.loads(os.environ.get('SENIOR_STAFF', '[]'))
+    senior_staff = ['zherman0', 'lizagilman', 'jmekkatt']
     data = {
         'meta': {
             'last_checked': datetime.now().astimezone().isoformat(),
@@ -226,6 +289,8 @@ def assemble(raw, output_dir):
         'pr_status': pr_status,
         'jira_activity': jira_activity,
         'action_items': action_items,
+        'jira_action_items': jira_action_items,
+        'qa_contact': qa_contact,
         'jira_mentions': jira_mentions,
         'dismissed_jira_mentions': [],
         'retro_items': []
@@ -249,22 +314,10 @@ def assemble(raw, output_dir):
             if pe.get('uber_ai') and 'uber_ai' not in epic:
                 epic['uber_ai'] = pe['uber_ai']
 
-        # PR AI summaries — only preserve if comment data hasn't changed
+        # PR status badges — always regenerate (they're deterministic and cheap)
         prev_prs = {p['number']: p for p in prev.get('prs', []) if isinstance(p, dict)}
         for pr in data['prs']:
-            pp = prev_prs.get(pr['number'], {})
-            if not pp:
-                continue
-            cur_comments = pr.get('comments', [])
-            prev_comments = pp.get('comments', [])
-            comments_changed = (
-                len(cur_comments) != len(prev_comments) or
-                (cur_comments and prev_comments and cur_comments[0].get('when') != prev_comments[0].get('when'))
-            )
-            if pp.get('ai_summary') and 'ai_summary' not in pr and not comments_changed:
-                pr['ai_summary'] = pp['ai_summary']
-            if pp.get('mention_summary') and not pr.get('mention_summary') and not comments_changed:
-                pr['mention_summary'] = pp['mention_summary']
+            pass  # status_badge is always regenerated below, no need to preserve
 
         # Epic children AI summaries
         prev_children = prev.get('epic_children', {})
@@ -304,6 +357,12 @@ def assemble(raw, output_dir):
                 # Only preserve if mention_text hasn't changed
                 if pm.get('mention_text') == item.get('mention_text'):
                     item['ai_summary'] = pm['ai_summary']
+
+    # Generate status badges for all PRs (deterministic, always regenerated)
+    for pr in data['prs']:
+        pr_st = pr_status.get(str(pr['number']))
+        pr['status_badge'] = generate_pr_status_badge(pr, pr_st, github_user)
+        pr.pop('ai_summary', None)
 
     # Write output
     output_path = os.path.join(output_dir, 'activity-data.js')

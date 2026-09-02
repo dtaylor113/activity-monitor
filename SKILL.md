@@ -81,8 +81,8 @@ window.ACTIVITY_DATA = {
   "child_pr_status": { "OCMUI-XXXX": { "pr_number", "pr_title", "pr_state", "pr_author", "pr_updated", "approvals": N, "changes_requested": N, "reviewers": [...], "checks": "passing|failing|pending", "mergeable_state": "clean|blocked|dirty|unstable", "ai_summary": "AI synthesis", "comments": [ { "user", "created_at", "body" } ] } },
   "siblings": { "OCMUI-XXXX": [ { "key", "summary", "status", "assignee", "type", "updated", "latest_comment": { "author", "created", "body" } | null } ] },
   "siblings_ai": { "OCMUI-XXXX": "AI synthesis of sibling status" },
-  "prs": [ { "number", "title", "what", "ai_summary": "AI synthesis", "author", "is_mine": bool, "created", "updated", "comments": [ { "who", "when", "body" } ], "mention_summary": "AI summary of @mention", "mention_raw": "raw comment text with quotes stripped" }, ... ],
-  "pr_status": { "NUMBER": { "reviewers": [ { "user", "state" } ], "checks": "passing|failing|pending", "mergeable_state": "clean|blocked|dirty|unstable" } },
+  "prs": [ { "number", "title", "what", "status_badge": "Awaiting author|Needs your re-review|Approved|Pending|...", "author", "is_mine": bool, "created", "updated", "comments": [ { "who", "when", "body" } ] }, ... ],
+  "pr_status": { "NUMBER": { "reviewers": [ { "user", "state" } ], "checks": "passing|failing|pending", "mergeable_state": "clean|blocked|dirty|unstable", "head_sha": "abc123", "my_last_review_at": "2026-01-01T00:00:00Z" } },
   "action_items": [ { "doc_id", "doc_name", "text", "date", "completed": bool, "heading_id": "h.xxxxx", "ai_summary" }, ... ],
   "jira_mentions": [ { "key", "summary", "status", "assignee", "mentioned_by", "mention_date", "mention_text", "ai_summary" }, ... ],
   "retro_items": [ { "text", "sprint", "date", "completed": bool, "ai_summary" }, ... ]
@@ -137,6 +137,10 @@ Each bullet is annotated with its reason for inclusion:
 - PRs with no new comments, reviews, or status changes are omitted
 - Sort: your PRs first, then review requests, then mentions
 - No tables — bullet lists only
+- **Author attribution**: Every PR number in chat output MUST be followed by
+  the author in parentheses: `#604 (@lizagilman)`. This applies everywhere a
+  PR number appears — section headers, bullets, inline references. The only
+  exception is the "My Open PRs" section where the user is the author.
 - When a PR is blocked by `changes_requested`, include a one-line quoted summary
   of the reviewer's last review comment or review body. Truncate to ~80 chars if
   needed. This gives the user immediate context on what needs fixing without
@@ -251,26 +255,41 @@ This tells the reader where the most recent activity is happening.
 - `siblings_ai.{KEY}` — auto-generated summary grouped by Jira ticket prefix with
   status counts per prefix. Format: `"@ <age> (<source>) — PREFIX1 (N Status1, N Status2) + PREFIX2 (N Status3)"`.
   Example: `"@ 1 day ago (Jira) — ROSAENG (1 To Do, 2 In Progress) + OSDOCS (1 In Progress) + PERFSCALE (1 Release Pending)"`
-- `prs[].ai_summary` — PR-level summary: staleness, comment themes, blocking issues
+- `prs[].status_badge` — compact ball-in-court status: "Awaiting author", "Needs your re-review", "Approved", "Pending", etc.
 - `child_pr_status.{KEY}.ai_summary` — child PR comment synthesis
 
 If the script isn't available or fails, fall back to the manual queries below.
 
-### 2. Assemble and generate AI summaries
+### 2. Assemble and generate status badges
 
-After gather completes, run assembly and then **always** generate AI summaries:
+After gather completes, run assembly:
 
 ```bash
-# Assemble raw data into activity-data.js (preserves existing AI summaries)
-export SENIOR_STAFF=$(GITHUB_TOKEN="" gh api "orgs/RedHatInsights/teams/uhc-portal-senior-staff/members" --jq '[.[].login]')
 python3 scripts/assemble.py /tmp/gather-output.txt .
 ```
 
-Then read `activity-data.js`, inspect every PR and epic that has an empty or stale
-`ai_summary`, generate a fresh summary per the rules above, and **write the updated
-`activity-data.js` back to disk**. This step is MANDATORY — never skip it.
+`assemble.py` generates a deterministic `status_badge` for each PR using
+`generate_pr_status_badge()`. This replaces the previous AI summary approach.
+Badges are always regenerated (not preserved across runs) since they are cheap
+and deterministic. Possible badge values:
 
-PRs with empty `ai_summary` fields will render as blank cells in the dashboard.
+- **"Awaiting author"** — user left `changes_requested` or last comment, author hasn't replied
+- **"Needs your re-review"** — author pushed new commits or replied after user's last review/comment
+- **"New activity since approval"** — user approved but new comments appeared
+- **"Approved"** — user approved, no new activity
+- **"Pending"** — user hasn't reviewed yet
+- **"Changes requested"** / **"Fully approved"** / **"Awaiting review"** — for user's own PRs
+
+PR comments now come from three sources in `gather.sh`:
+1. **Issue comments** — general PR conversation (`GET /issues/{pr}/comments`)
+2. **Review thread comments** — inline code review threads (GraphQL, unresolved only, last 5 per thread)
+3. **Review body text** — formal review submissions with non-empty body (`GET /pulls/{pr}/reviews`)
+
+Comments are merged, deduped, sorted by date, and limited to the last 15 per PR.
+`assemble.py` truncates bodies to 500 chars and keeps 12 comments per PR.
+
+AI summaries are still generated for epics, children, action items, and Jira
+mentions — only PR-level summaries have been replaced with status badges.
 
 ### 3. Present the summary
 
@@ -663,16 +682,17 @@ issue comments on the PR, their state is upgraded to `commented`. This ensures t
 dashboard accurately reflects engagement even when reviewers use general comments
 instead of the formal "Submit review" workflow.
 
-Columns: PR | Title | Author | Reviewers | Checks | AI Summary | Created
+Columns: PR | Title | Author | Reviewers | Checks | Status | Created
 - Title = full PR title (includes Jira ticket ID prefix, e.g. "OCMUI-4330: ...")
 - Author = GitHub username who opened the PR
 - Reviewers = individual reviewers with colored status (approved/changes_requested/commented/pending)
 - Checks = CI status (passing/failing/pending) + merge status (mergeable/blocked/conflicts/unstable)
-- AI Summary = synthesized comment themes and staleness (`.ai-text` styled)
+- Status = compact badge showing ball-in-court (e.g., "Awaiting author", "Needs your re-review", "Approved", "Pending"). Color-coded: red for action needed, yellow for waiting, green for approved, gray for pending.
 - Created = date PR was opened (oldest PRs surface first for attention)
-- Comment sub-rows beneath each PR (hidden by default, toggled via "Show Comments" button)
-  showing up to 8 most recent unresolved non-bot comments (issue + review thread comments,
-  sorted newest first). Resolved review threads are excluded via GraphQL `isResolved` field.
+- Comment sub-rows beneath each PR (collapsible `<details>` element)
+  showing up to 10 most recent non-bot comments from three sources: issue comments,
+  review thread comments (both resolved and unresolved), and formal review body text.
+  Bodies truncated to 500 chars.
 
 ### Linking
 
