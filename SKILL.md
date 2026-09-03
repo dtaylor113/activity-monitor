@@ -106,45 +106,62 @@ how the user triggers the skill ("regather and run", "catch me up", "been away",
 ```
 **GitHub PRs:**
 
-- bullet per PR with notable activity since last_checked
-- annotate WHY each PR is listed (see categories below)
-- final bullet: review queue count ("Review queue: N PRs awaiting you")
+=== My Open PRs ===
+- #NNN — status details (approvals, changes requested, checks)
+
+=== PRs I'm Reviewing ===
+- #NNN (@author) — status summary with contextual impact
+- #NNN (@author) — blocked — jmekkatt requested changes, awaiting author push
 
 ---
 
-**Jira activity (since <date>):**
+**Jira Activity:**
 
 - bullet per ticket with a meaningful change since last_checked
 
+**JIRAs I'm Mentioned In:**
+
+- bullet per unanswered Jira mention
+
 ---
 
-**Priority actions:**
-1. Most urgent action (max 3 items)
+**Priority Actions:**
+- 🔴 items needing immediate attention (re-review, changes requested on your PRs)
+- 🟡 items blocked by others (changes requested by another reviewer)
 ```
 
 ### GitHub PR categories
 
-Each bullet is annotated with its reason for inclusion:
+Use `=== Section Title ===` headers to separate PR groups:
 
-- **Your PR** — current reviewer states, blockers, what's needed to merge
-- **Review requested from you** — who opened it, what it does, when requested
-- **You were mentioned** — context of the mention, who mentioned you
-- **Review queue count** (final bullet) — just the count, no detail (dashboard has the full list)
+- **=== My Open PRs ===** — current reviewer states, blockers, what's needed to merge
+- **=== PRs I'm Reviewing ===** — status badge, who opened it, latest comment info
 
 ### GitHub PR rules
 
+- **Skip [DRAFT] PRs** in chat output entirely — they are not ready for review
 - Only include PRs with activity since `last_checked`
 - PRs with no new comments, reviews, or status changes are omitted
-- Sort: your PRs first, then review requests, then mentions
+- Sort: your PRs first, then review requests
 - No tables — bullet lists only
 - **Author attribution**: Every PR number in chat output MUST be followed by
   the author in parentheses: `#604 (@lizagilman)`. This applies everywhere a
   PR number appears — section headers, bullets, inline references. The only
   exception is the "My Open PRs" section where the user is the author.
-- When a PR is blocked by `changes_requested`, include a one-line quoted summary
-  of the reviewer's last review comment or review body. Truncate to ~80 chars if
-  needed. This gives the user immediate context on what needs fixing without
-  opening GitHub.
+- **Contextual impact**: When reporting status badges, state definitively how
+  the activity affects the user. No hedging ("may need"). Examples:
+  - "jmekkatt requested changes after your approval — re-review needed after author pushes"
+  - "blocked — jmekkatt requested changes, awaiting author push"
+  - "you requested changes, awaiting author response"
+  Don't just echo the badge; add the who/what/why.
+- **PR line format**: Single line per PR, no sub-bullets, no PR titles:
+  - My PRs: `#NNN — status`
+  - Reviewing: `#NNN (@author) — status`
+  Example:
+  ```
+  - #667 (@zherman0) — jmekkatt requested changes after your approval, re-review needed after author pushes
+  - #672 (@akkiangadi) — blocked — jmekkatt requested changes, awaiting author push
+  ```
 
 ### Jira rules
 

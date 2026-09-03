@@ -89,12 +89,13 @@ tr.epic-detail td { background: #0d0d1a; padding: 10px 14px 10px 48px; border-to
 .detail-label:hover { color: #93c5fd; }
 
 /* PR comment sub-rows */
-tr.pr-comments { display: none; }
-tr.pr-comments.visible td { display: table-cell; }
-tr.pr-comments.visible { display: table-row; }
+tr.pr-comments { display: table-row; }
+tr.pr-comments.hidden { display: none; }
 tr.pr-comments td { background: #0d0d1a; border-top: none; padding: 3px 10px 6px 10px; font-size: 11px; color: #9ca3af; line-height: 1.4; }
 .pr-comments-toggle { background: rgba(165, 180, 252, 0.12); border: 1px solid rgba(165, 180, 252, 0.3); color: #a5b4fc; font-size: 11px; padding: 3px 10px; border-radius: 3px; cursor: pointer; margin-left: 10px; vertical-align: middle; }
 .pr-comments-toggle:hover { background: rgba(165, 180, 252, 0.2); }
+.draft-toggle { background: rgba(165, 180, 252, 0.12); border: 1px solid rgba(165, 180, 252, 0.3); color: #a5b4fc; font-size: 11px; padding: 3px 10px; border-radius: 3px; cursor: pointer; margin-left: 6px; vertical-align: middle; }
+.draft-toggle:hover { background: rgba(165, 180, 252, 0.2); }
 .pr-comment-line { padding: 2px 0; }
 .comment-label { color: #60a5fa; font-weight: 600; margin-right: 4px; }
 
@@ -350,25 +351,42 @@ function renderPRs() {
   let html = '';
 
   if (myPRs.length) {
-    html += `<h3>My PRs <button class="pr-comments-toggle" data-table="my-prs-table">Show Comments</button></h3>`;
-    html += renderPRTable(myPRs, 'my-prs-table');
+    const nonDraftPRs = myPRs.filter(pr => {
+      const st = D.pr_status && D.pr_status[pr.number];
+      return !st || !st.draft;
+    });
+    const draftPRs = myPRs.filter(pr => {
+      const st = D.pr_status && D.pr_status[pr.number];
+      return st && st.draft;
+    });
+    html += `<h3>My PRs <button class="pr-comments-toggle" data-table="my-prs-table">Hide Comments</button>`;
+    if (draftPRs.length) {
+      html += ` <button class="draft-toggle" data-draft-table="my-draft-prs-table">Show Draft PRs (${draftPRs.length})</button>`;
+    }
+    html += `</h3>`;
+    html += renderPRTable(nonDraftPRs, 'my-prs-table');
+    if (draftPRs.length) {
+      html += `<div id="my-draft-prs-table-wrap" style="display:none;">`;
+      html += renderPRTable(draftPRs, 'my-draft-prs-table');
+      html += `</div>`;
+    }
   }
 
   if (directReviewPRs.length) {
-    html += `<h3>PRs I'm Reviewing <button class="pr-comments-toggle" data-table="reviewing-prs-table">Show Comments</button></h3>`;
+    html += `<h3>PRs I'm Reviewing <button class="pr-comments-toggle" data-table="reviewing-prs-table">Hide Comments</button></h3>`;
     html += renderPRTable(directReviewPRs, 'reviewing-prs-table');
   }
 
   if (seniorStaffPRs.length) {
     html += `<details><summary style="cursor:pointer;"><h3 style="display:inline;">Senior Staff PRs (${seniorStaffPRs.length})</h3></summary>`;
-    html += `<button class="pr-comments-toggle" data-table="senior-prs-table" style="margin:8px 0;">Show Comments</button>`;
+    html += `<button class="pr-comments-toggle" data-table="senior-prs-table" style="margin:8px 0;">Hide Comments</button>`;
     html += renderPRTable(seniorStaffPRs, 'senior-prs-table');
     html += `</details>`;
   }
 
   if (approvedPRs.length) {
     html += `<details><summary style="cursor:pointer;"><h3 style="display:inline;">PRs I've Approved (${approvedPRs.length})</h3></summary>`;
-    html += `<button class="pr-comments-toggle" data-table="approved-prs-table" style="margin:8px 0;">Show Comments</button>`;
+    html += `<button class="pr-comments-toggle" data-table="approved-prs-table" style="margin:8px 0;">Hide Comments</button>`;
     html += renderPRTable(approvedPRs, 'approved-prs-table');
     html += `</details>`;
   } else {
@@ -385,7 +403,7 @@ function renderPRs() {
 function renderPRTable(prs, tableId) {
   const qaTicketKeys = new Set((D.qa_contact || []).map(q => q.key));
   let html = `<table id="${tableId}"><thead><tr>`;
-  ['PR','Title','Author','Reviewers','Checks','Status','Created'].forEach(h => {
+  ['PR','Title','Author','Reviewers','Checks','Created'].forEach(h => {
     html += `<th>${h}<span class="sort-indicator">⇅</span><div class="resize-handle"></div></th>`;
   });
   html += `</tr></thead><tbody>`;
@@ -393,15 +411,14 @@ function renderPRTable(prs, tableId) {
     const st = (D.pr_status && D.pr_status[pr.number]) || {};
     const ticketMatch = (pr.title || '').match(/OCMUI-\d+/);
     const isQAContact = ticketMatch && qaTicketKeys.has(ticketMatch[0]);
-    const reviewHtml = renderReviewers(st.reviewers, isQAContact);
+    const reviewHtml = renderReviewers(st.reviewers, isQAContact, pr.status_badge);
     const checksHtml = renderChecksBadge(st.checks || 'unknown');
     const mergeHtml = renderMergeStatus(st.mergeable_state || '');
     const statusHtml = mergeHtml ? checksHtml + '<br>' + mergeHtml : checksHtml;
     const titleDisplay = (st.draft ? '[DRAFT] ' : '') + (pr.title || '');
-    const badgeHtml = renderStatusBadge(pr.status_badge || '');
-    html += `<tr><td class="nowrap">${ghLink(pr.number)}</td><td>${esc(titleDisplay)}</td><td>${esc(pr.author)}</td><td>${reviewHtml}</td><td class="nowrap">${statusHtml}</td><td class="nowrap">${badgeHtml}</td><td>${esc(pr.created || pr.updated)}</td></tr>`;
+    html += `<tr><td class="nowrap">${ghLink(pr.number)}</td><td>${esc(titleDisplay)}</td><td>${esc(pr.author)}</td><td>${reviewHtml}</td><td class="nowrap">${statusHtml}</td><td>${esc(pr.created || pr.updated)}</td></tr>`;
     const comments = (pr.comments || []).slice().sort((a, b) => (b.when || '').localeCompare(a.when || '')).slice(0, 10);
-    html += `<tr class="pr-comments"><td></td><td colspan="6">`;
+    html += `<tr class="pr-comments"><td></td><td colspan="5">`;
     if (comments.length) {
       html += `<details><summary>Show ${comments.length} comments</summary>`;
       comments.forEach(c => { html += `<div class="pr-comment-line"><span class="comment-label">${esc(c.who)} (${esc(c.when)}):</span> "${esc(c.body)}"</div>`; });
@@ -413,7 +430,7 @@ function renderPRTable(prs, tableId) {
   return html;
 }
 
-function renderReviewers(reviewers, isQAContact) {
+function renderReviewers(reviewers, isQAContact, statusBadge) {
   if (!reviewers || !reviewers.length) return `<span style="color:#6b7280;">—</span>`;
   const myUser = D.meta.github_user;
   const stateMap = {
@@ -422,12 +439,18 @@ function renderReviewers(reviewers, isQAContact) {
     commented: {icon: '💬', color: '#f59e0b'},
     pending: {icon: '⏳', color: '#6b7280'}
   };
-  return `<span class="reviewer-line">` + reviewers.map(r => {
+  return reviewers.map(r => {
     const s = stateMap[r.state] || stateMap.pending;
     const displayName = r.via_team ? r.via_team.replace(/-/g, ' ') : r.user;
-    const qaIcon = (isQAContact && r.user === myUser) ? '<span title="QA Contact" style="margin-left:2px;">🧪</span>' : '';
-    return `<span style="color:${s.color};white-space:nowrap;" title="${r.via_team ? 'via team: ' + r.via_team : r.state}">${s.icon} ${esc(displayName)}</span>${qaIcon}`;
-  }).join(' &nbsp;') + `</span>`;
+    let parts = `<span style="color:${s.color};white-space:nowrap;" title="${r.via_team ? 'via team: ' + r.via_team : r.state}">${s.icon} ${esc(displayName)}</span>`;
+    if (isQAContact && r.user === myUser) {
+      parts += ' <span style="color:#60a5fa;font-size:0.85em;white-space:nowrap;" title="QA Contact">🛡️QA</span>';
+    }
+    if (r.user === myUser && r.state === 'changes_requested' && statusBadge === 'Awaiting author') {
+      parts += ' <span style="color:#f59e0b;font-size:0.85em;font-style:italic;white-space:nowrap;">awaiting author</span>';
+    }
+    return parts;
+  }).join(' <span style="color:#374151;">│</span> ');
 }
 
 function renderChecksBadge(status) {
@@ -435,15 +458,6 @@ function renderChecksBadge(status) {
   if (status === 'failing') return `<span style="color:#ef4444;">● failing</span>`;
   if (status === 'pending') return `<span style="color:#f59e0b;">● pending</span>`;
   return `<span style="color:#6b7280;">—</span>`;
-}
-function renderStatusBadge(badge) {
-  if (!badge) return '';
-  let color = '#6b7280';
-  if (/^Changes requested/.test(badge)) color = '#f59e0b';
-  else if (badge === 'Needs your re-review' || badge === 'New activity since approval') color = '#ef4444';
-  else if (badge === 'Awaiting author' || badge === 'Awaiting review') color = '#f59e0b';
-  else if (badge === 'Approved' || /^\d+ approved$/.test(badge)) color = '#22c55e';
-  return `<span style="color:${color};font-weight:600;font-size:0.85em;">${esc(badge)}</span>`;
 }
 function renderMergeStatus(state) {
   if (state === 'clean') return `<span style="color:#22c55e;" title="Ready to merge">✓ mergeable</span>`;
@@ -456,15 +470,19 @@ function renderMergeStatus(state) {
 function renderRetroItems() {
   const retros = D.retro_items || [];
   if (!retros.length) return '<p class="meta">No retro action items found.</p>';
+  const doneKeys = JSON.parse(localStorage.getItem('done_retro_items') || '[]');
+  const visible = retros.filter((item, idx) => !doneKeys.includes('retro|' + (item.text || '').slice(0, 80)));
+  if (!visible.length) return '<p class="meta">All retro items done. 🎉</p>';
 
   let html = `<table id="retro-items-table" class="pr-table"><thead><tr>`;
-  ['#','Action','Sprint','Age','AI Summary'].forEach(h => {
+  ['#','Action','Sprint','Age','AI Summary','Done'].forEach(h => {
     html += `<th>${h}<span class="sort-indicator">⇅</span><div class="resize-handle"></div></th>`;
   });
   html += `</tr></thead><tbody>`;
 
-  for (let idx = 0; idx < retros.length; idx++) {
-    const item = retros[idx];
+  for (let idx = 0; idx < visible.length; idx++) {
+    const item = visible[idx];
+    const doneKey = 'retro|' + (item.text || '').slice(0, 80);
     const age = item.date ? (() => {
       const d = new Date(item.date);
       const days = Math.floor((new Date() - d) / 86400000);
@@ -481,6 +499,7 @@ function renderRetroItems() {
       <td>${item.sprint || ''}</td>
       <td>${age}</td>
       <td>${aiDiamond}</td>
+      <td class="nowrap" style="text-align:center;"><input type="checkbox" class="done-retro-checkbox" data-done-key="${esc(doneKey)}" title="Mark done — hides this item"></td>
     </tr>`;
   }
   html += '</tbody></table>';
@@ -524,11 +543,13 @@ function renderQAContact() {
 
 function renderJiraMentions() {
   const dismissed = D.dismissed_jira_mentions || [];
-  const items = (D.jira_mentions || []).filter(i => !dismissed.includes(i.key));
+  const acked = JSON.parse(localStorage.getItem('ack_jira_mentions') || '[]');
+  const hidden = new Set([...dismissed, ...acked]);
+  const items = (D.jira_mentions || []).filter(i => !hidden.has(i.key));
   let html = `<h3>JIRAs I'm Mentioned In</h3>`;
   if (!items.length) return html + `<p class="meta">It's all good.</p>`;
   html += `<table id="jira-mentions-table" class="pr-table"><thead><tr>`;
-  ['Ticket','Summary','Status','Assignee','Mentioned By','Date','Comment'].forEach(h => {
+  ['Ticket','Summary','Status','Assignee','Mentioned By','Date','Comment','Ack'].forEach(h => {
     html += `<th>${h}<span class="sort-indicator">⇅</span><div class="resize-handle"></div></th>`;
   });
   html += `</tr></thead><tbody>`;
@@ -539,7 +560,7 @@ function renderJiraMentions() {
     const commentHtml = mentionText
       ? `${aiDiamond}<details open style="margin-top:4px;"><summary style="cursor:pointer;color:#6b7280;font-size:0.85em;">Show comment</summary><pre style="white-space:pre-wrap;font-size:0.8em;margin:4px 0 0;color:#9ca3af;max-height:200px;overflow-y:auto;">${esc(mentionText)}</pre></details>`
       : aiDiamond;
-    html += `<tr>
+    html += `<tr data-ack-key="${item.key}">
       <td class="nowrap"><a href="${url}" target="_blank">${item.key}</a></td>
       <td>${esc(item.summary)}</td>
       <td>${esc(item.status)}</td>
@@ -547,6 +568,7 @@ function renderJiraMentions() {
       <td>${esc(item.mentioned_by)}</td>
       <td class="nowrap">${item.mention_date || ''}</td>
       <td>${commentHtml}</td>
+      <td class="nowrap" style="text-align:center;"><input type="checkbox" class="ack-checkbox" data-key="${item.key}" title="Acknowledge — hides this mention"></td>
     </tr>`;
   }
   html += '</tbody></table>';
@@ -576,14 +598,18 @@ function renderActionItems() {
 
   function renderGroup(groupItems, groupLabel, tableId) {
     if (!groupItems.length) return '';
-    let html = groupLabel ? `<h4 style="margin:12px 0 6px;">${groupLabel}</h4>` : '';
+    const doneKeys = JSON.parse(localStorage.getItem('done_action_items') || '[]');
+    const visible = groupItems.filter(i => !doneKeys.includes(i.doc_id + '|' + (i.text || '').slice(0, 80)));
+    if (!visible.length && groupLabel) return '';
+    let html = groupLabel ? `<h4 style="margin:12px 0 6px;">${groupLabel.replace(/\d+/, visible.length)}</h4>` : '';
     html += `<table id="${tableId}" class="pr-table"><thead><tr>`;
-    ['#','Action','Source','Date','Age','AI Summary'].forEach(h => {
+    ['#','Action','Source','Date','Age','AI Summary','Done'].forEach(h => {
       html += `<th>${h}<span class="sort-indicator">⇅</span><div class="resize-handle"></div></th>`;
     });
     html += `</tr></thead><tbody>`;
-    for (let idx = 0; idx < groupItems.length; idx++) {
-      const item = groupItems[idx];
+    for (let idx = 0; idx < visible.length; idx++) {
+      const item = visible[idx];
+      const doneKey = item.doc_id + '|' + (item.text || '').slice(0, 80);
       const anchor = item.heading_id ? `#heading=${item.heading_id}` : '';
       const docUrl = `https://docs.google.com/document/d/${item.doc_id}/edit${anchor}`;
       const textStyle = item.completed ? 'text-decoration:line-through; opacity:0.6;' : '';
@@ -597,6 +623,7 @@ function renderActionItems() {
         <td>${item.date || ''}</td>
         <td>${age}</td>
         <td>${aiDiamond}</td>
+        <td class="nowrap" style="text-align:center;"><input type="checkbox" class="done-action-checkbox" data-done-key="${esc(doneKey)}" title="Mark done — hides this item"></td>
       </tr>`;
     }
     html += '</tbody></table>';
@@ -620,18 +647,23 @@ function renderActionItems() {
 function renderJiraActionItems() {
   const items = D.jira_action_items || [];
   if (!items.length) return '<p class="meta">No Jira action items found.</p>';
+  const doneKeys = JSON.parse(localStorage.getItem('done_jira_action_items') || '[]');
+  const visible = items.filter(item => !doneKeys.includes('jira-ai|' + item.key + '|' + (item.text || '').slice(0, 80)));
+  if (!visible.length) return '<p class="meta">All Jira action items done. 🎉</p>';
   let html = `<table id="jira-action-items-table" class="pr-table"><thead><tr>`;
-  ['#','Action','Ticket','Source','Date'].forEach(h => {
+  ['#','Action','Ticket','Source','Date','Done'].forEach(h => {
     html += `<th>${h}<span class="sort-indicator">⇅</span><div class="resize-handle"></div></th>`;
   });
   html += `</tr></thead><tbody>`;
-  items.forEach((item, idx) => {
+  visible.forEach((item, idx) => {
+    const doneKey = 'jira-ai|' + item.key + '|' + (item.text || '').slice(0, 80);
     html += `<tr>
       <td class="nowrap">${idx + 1}</td>
       <td>${esc(item.text)}</td>
       <td class="nowrap"><a href="${item.url}" target="_blank">${esc(item.key)}</a></td>
       <td>${esc(item.source)}</td>
       <td class="nowrap">${item.date || ''}</td>
+      <td class="nowrap" style="text-align:center;"><input type="checkbox" class="done-jira-ai-checkbox" data-done-key="${esc(doneKey)}" title="Mark done — hides this item"></td>
     </tr>`;
   });
   html += '</tbody></table>';
@@ -655,7 +687,34 @@ function renderPage() {
   html += renderActionItems();
   html += `</div>`;
   document.getElementById('app').innerHTML = html;
+  pruneLocalStorage();
   initInteractions();
+}
+
+function pruneLocalStorage() {
+  // Prune acked Jira mentions no longer in the data (ticket closed/resolved)
+  const mentionKeys = new Set((D.jira_mentions || []).map(m => m.key));
+  const acked = JSON.parse(localStorage.getItem('ack_jira_mentions') || '[]');
+  const prunedAck = acked.filter(k => mentionKeys.has(k));
+  if (prunedAck.length !== acked.length) localStorage.setItem('ack_jira_mentions', JSON.stringify(prunedAck));
+
+  // Prune done action items no longer in the data
+  const actionKeys = new Set((D.action_items || []).map(i => i.doc_id + '|' + (i.text || '').slice(0, 80)));
+  const doneActions = JSON.parse(localStorage.getItem('done_action_items') || '[]');
+  const prunedActions = doneActions.filter(k => actionKeys.has(k));
+  if (prunedActions.length !== doneActions.length) localStorage.setItem('done_action_items', JSON.stringify(prunedActions));
+
+  // Prune done retro items no longer in the data
+  const retroKeys = new Set((D.retro_items || []).map(i => 'retro|' + (i.text || '').slice(0, 80)));
+  const doneRetro = JSON.parse(localStorage.getItem('done_retro_items') || '[]');
+  const prunedRetro = doneRetro.filter(k => retroKeys.has(k));
+  if (prunedRetro.length !== doneRetro.length) localStorage.setItem('done_retro_items', JSON.stringify(prunedRetro));
+
+  // Prune done Jira action items no longer in the data
+  const jiraAiKeys = new Set((D.jira_action_items || []).map(i => 'jira-ai|' + i.key + '|' + (i.text || '').slice(0, 80)));
+  const doneJiraAi = JSON.parse(localStorage.getItem('done_jira_action_items') || '[]');
+  const prunedJiraAi = doneJiraAi.filter(k => jiraAiKeys.has(k));
+  if (prunedJiraAi.length !== doneJiraAi.length) localStorage.setItem('done_jira_action_items', JSON.stringify(prunedJiraAi));
 }
 
 function initInteractions() {
@@ -681,9 +740,21 @@ function initInteractions() {
       const table = document.getElementById(tableId);
       if (!table) return;
       const commentRows = table.querySelectorAll('tr.pr-comments');
-      const anyVisible = Array.from(commentRows).some(r => r.classList.contains('visible'));
-      commentRows.forEach(r => r.classList.toggle('visible', !anyVisible));
+      const anyVisible = Array.from(commentRows).some(r => !r.classList.contains('hidden'));
+      commentRows.forEach(r => r.classList.toggle('hidden', anyVisible));
       btn.textContent = anyVisible ? 'Show Comments' : 'Hide Comments';
+    });
+  });
+
+  // Draft PRs show/hide button
+  document.querySelectorAll('.draft-toggle').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const tableId = btn.getAttribute('data-draft-table');
+      const wrap = document.getElementById(tableId + '-wrap');
+      if (!wrap) return;
+      const visible = wrap.style.display !== 'none';
+      wrap.style.display = visible ? 'none' : '';
+      btn.textContent = visible ? btn.textContent.replace('Hide', 'Show') : btn.textContent.replace('Show', 'Hide');
     });
   });
 
@@ -746,6 +817,54 @@ function initInteractions() {
       document.addEventListener('mousemove', onMove);
       document.addEventListener('mouseup', onUp);
       e.preventDefault();
+    });
+  });
+
+  // Ack checkboxes — Jira mentions
+  document.querySelectorAll('.ack-checkbox').forEach(cb => {
+    cb.addEventListener('change', () => {
+      const key = cb.getAttribute('data-key');
+      const acked = JSON.parse(localStorage.getItem('ack_jira_mentions') || '[]');
+      if (cb.checked && !acked.includes(key)) acked.push(key);
+      localStorage.setItem('ack_jira_mentions', JSON.stringify(acked));
+      cb.closest('tr').style.opacity = '0.3';
+      setTimeout(() => renderPage(), 400);
+    });
+  });
+
+  // Done checkboxes — Google Docs action items
+  document.querySelectorAll('.done-action-checkbox').forEach(cb => {
+    cb.addEventListener('change', () => {
+      const key = cb.getAttribute('data-done-key');
+      const done = JSON.parse(localStorage.getItem('done_action_items') || '[]');
+      if (cb.checked && !done.includes(key)) done.push(key);
+      localStorage.setItem('done_action_items', JSON.stringify(done));
+      cb.closest('tr').style.opacity = '0.3';
+      setTimeout(() => renderPage(), 400);
+    });
+  });
+
+  // Done checkboxes — Retro items
+  document.querySelectorAll('.done-retro-checkbox').forEach(cb => {
+    cb.addEventListener('change', () => {
+      const key = cb.getAttribute('data-done-key');
+      const done = JSON.parse(localStorage.getItem('done_retro_items') || '[]');
+      if (cb.checked && !done.includes(key)) done.push(key);
+      localStorage.setItem('done_retro_items', JSON.stringify(done));
+      cb.closest('tr').style.opacity = '0.3';
+      setTimeout(() => renderPage(), 400);
+    });
+  });
+
+  // Done checkboxes — Jira action items
+  document.querySelectorAll('.done-jira-ai-checkbox').forEach(cb => {
+    cb.addEventListener('change', () => {
+      const key = cb.getAttribute('data-done-key');
+      const done = JSON.parse(localStorage.getItem('done_jira_action_items') || '[]');
+      if (cb.checked && !done.includes(key)) done.push(key);
+      localStorage.setItem('done_jira_action_items', JSON.stringify(done));
+      cb.closest('tr').style.opacity = '0.3';
+      setTimeout(() => renderPage(), 400);
     });
   });
 }
