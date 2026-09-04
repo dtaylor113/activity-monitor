@@ -349,6 +349,16 @@ def assemble(raw, output_dir):
         if prev.get('dismissed_jira_mentions'):
             data['dismissed_jira_mentions'] = prev['dismissed_jira_mentions']
 
+        # Jira action items — merge previous with new (accumulate over time)
+        prev_jira_ai = prev.get('jira_action_items', [])
+        if prev_jira_ai:
+            existing_keys = {(i.get('key', '') + '|' + (i.get('text', '')[:80])) for i in data['jira_action_items']}
+            for item in prev_jira_ai:
+                item_key = item.get('key', '') + '|' + (item.get('text', '')[:80])
+                if item_key not in existing_keys:
+                    data['jira_action_items'].append(item)
+                    existing_keys.add(item_key)
+
         # Jira mentions AI summaries — match by issue key
         prev_jira_mentions = {m['key']: m for m in prev.get('jira_mentions', []) if isinstance(m, dict)}
         for item in data['jira_mentions']:

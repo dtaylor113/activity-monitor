@@ -89,8 +89,6 @@ tr.epic-detail td { background: #0d0d1a; padding: 10px 14px 10px 48px; border-to
 .detail-label:hover { color: #93c5fd; }
 
 /* PR comment sub-rows */
-tr.pr-comments { display: table-row; }
-tr.pr-comments.hidden { display: none; }
 tr.pr-comments td { background: #0d0d1a; border-top: none; padding: 3px 10px 6px 10px; font-size: 11px; color: #9ca3af; line-height: 1.4; }
 .pr-comments-toggle { background: rgba(165, 180, 252, 0.12); border: 1px solid rgba(165, 180, 252, 0.3); color: #a5b4fc; font-size: 11px; padding: 3px 10px; border-radius: 3px; cursor: pointer; margin-left: 10px; vertical-align: middle; }
 .pr-comments-toggle:hover { background: rgba(165, 180, 252, 0.2); }
@@ -98,6 +96,14 @@ tr.pr-comments td { background: #0d0d1a; border-top: none; padding: 3px 10px 6px
 .draft-toggle:hover { background: rgba(165, 180, 252, 0.2); }
 .pr-comment-line { padding: 2px 0; }
 .comment-label { color: #60a5fa; font-weight: 600; margin-right: 4px; }
+
+/* Tabs */
+.tab-bar { display: flex; gap: 0; border-bottom: 2px solid #333; margin: 16px 0 0 0; }
+.tab-btn { padding: 8px 24px; background: transparent; border: none; color: #6b7280; font-size: 14px; font-weight: 600; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -2px; transition: color 0.15s, border-color 0.15s; }
+.tab-btn:hover { color: #a5b4fc; }
+.tab-btn.active { color: #a5b4fc; border-bottom-color: #a5b4fc; }
+.tab-panel { display: none; padding-top: 8px; }
+.tab-panel.active { display: block; }
 
 .filter-bar { margin: 8px 0; }
 .filter-bar input { background: #1a1a2e; border: 1px solid #333; color: #e5e7eb; padding: 6px 10px; border-radius: 4px; font-size: 13px; width: 320px; }
@@ -288,12 +294,9 @@ function renderEpicsTable() {
 function renderPRs() {
   const myUser = D.meta.github_user;
   const myPRs = D.prs.filter(pr => pr.author === myUser);
-  const seniorStaff = D.meta.senior_staff || [];
-  const reviewStatePriority = {pending: 0, commented: 1, changes_requested: 2};
 
-  // Categorize PRs where I'm a reviewer
+  // Only PRs where I'm individually requested (not via team)
   const directReviewPRs = [];
-  const seniorStaffPRs = [];
   const approvedPRs = [];
 
   D.prs.forEach(pr => {
@@ -301,32 +304,17 @@ function renderPRs() {
     const st = D.pr_status && D.pr_status[pr.number];
     if (!st || !st.reviewers) return;
     const myReview = st.reviewers.find(r => r.user === myUser);
-
-    if (!myReview) {
-      return;
-    }
+    if (!myReview) return;
 
     if (myReview.state === 'approved') {
       approvedPRs.push(pr);
       return;
     }
 
-    const isViaTeam = !!myReview.via_team;
+    // Skip team-only requests — only show individually assigned
+    if (myReview.via_team) return;
 
-    if (!isViaTeam) {
-      directReviewPRs.push(pr);
-    } else {
-      const otherSeniorAssigned = st.reviewers.some(r =>
-        r.user !== myUser &&
-        seniorStaff.includes(r.user) &&
-        !r.via_team
-      );
-      if (otherSeniorAssigned) {
-        seniorStaffPRs.push(pr);
-      } else {
-        directReviewPRs.push(pr);
-      }
-    }
+    directReviewPRs.push(pr);
   });
 
   directReviewPRs.sort((a, b) => {
@@ -334,10 +322,7 @@ function renderPRs() {
     const stB = (D.pr_status && D.pr_status[b.number]) || {};
     const myRevA = (stA.reviewers || []).find(r => r.user === myUser);
     const myRevB = (stB.reviewers || []).find(r => r.user === myUser);
-    // Drafts always last
-    if (stA.draft && !stB.draft) return 1;
-    if (!stA.draft && stB.draft) return -1;
-    // Then sort: pending/commented first, changes_requested second
+    // pending/commented first, changes_requested second
     const stateOrder = s => s === 'changes_requested' ? 1 : 0;
     const orderA = stateOrder(myRevA ? myRevA.state : '');
     const orderB = stateOrder(myRevB ? myRevB.state : '');
@@ -345,7 +330,6 @@ function renderPRs() {
     // Within same group, oldest created first
     return (a.created || a.updated || '').localeCompare(b.created || b.updated || '');
   });
-  seniorStaffPRs.sort((a, b) => (a.created || a.updated || '').localeCompare(b.created || b.updated || ''));
   approvedPRs.sort((a, b) => (a.created || a.updated || '').localeCompare(b.created || b.updated || ''));
 
   let html = '';
@@ -359,7 +343,7 @@ function renderPRs() {
       const st = D.pr_status && D.pr_status[pr.number];
       return st && st.draft;
     });
-    html += `<h3>My PRs <button class="pr-comments-toggle" data-table="my-prs-table">Hide Comments</button>`;
+    html += `<h3>My PRs <button class="pr-comments-toggle" data-table="my-prs-table">Expand Comments</button>`;
     if (draftPRs.length) {
       html += ` <button class="draft-toggle" data-draft-table="my-draft-prs-table">Show Draft PRs (${draftPRs.length})</button>`;
     }
@@ -373,27 +357,20 @@ function renderPRs() {
   }
 
   if (directReviewPRs.length) {
-    html += `<h3>PRs I'm Reviewing <button class="pr-comments-toggle" data-table="reviewing-prs-table">Hide Comments</button></h3>`;
+    html += `<h3>PRs I'm Reviewing <button class="pr-comments-toggle" data-table="reviewing-prs-table">Expand Comments</button></h3>`;
     html += renderPRTable(directReviewPRs, 'reviewing-prs-table');
-  }
-
-  if (seniorStaffPRs.length) {
-    html += `<details><summary style="cursor:pointer;"><h3 style="display:inline;">Senior Staff PRs (${seniorStaffPRs.length})</h3></summary>`;
-    html += `<button class="pr-comments-toggle" data-table="senior-prs-table" style="margin:8px 0;">Hide Comments</button>`;
-    html += renderPRTable(seniorStaffPRs, 'senior-prs-table');
-    html += `</details>`;
   }
 
   if (approvedPRs.length) {
     html += `<details><summary style="cursor:pointer;"><h3 style="display:inline;">PRs I've Approved (${approvedPRs.length})</h3></summary>`;
-    html += `<button class="pr-comments-toggle" data-table="approved-prs-table" style="margin:8px 0;">Hide Comments</button>`;
+    html += `<button class="pr-comments-toggle" data-table="approved-prs-table" style="margin:8px 0;">Expand Comments</button>`;
     html += renderPRTable(approvedPRs, 'approved-prs-table');
     html += `</details>`;
   } else {
     html += `<h3>PRs I've Approved</h3><p class="meta">It's all good.</p>`;
   }
 
-  if (!myPRs.length && !directReviewPRs.length && !seniorStaffPRs.length && !approvedPRs.length) {
+  if (!myPRs.length && !directReviewPRs.length && !approvedPRs.length) {
     html += `<h3>PRs Needing My Attention</h3><div style="color:#6b7280;">No open PRs needing attention.</div>`;
   }
 
@@ -401,9 +378,10 @@ function renderPRs() {
 }
 
 function renderPRTable(prs, tableId) {
+  const myUser = D.meta.github_user;
   const qaTicketKeys = new Set((D.qa_contact || []).map(q => q.key));
   let html = `<table id="${tableId}"><thead><tr>`;
-  ['PR','Title','Author','Reviewers','Checks','Created'].forEach(h => {
+  ['PR','Title','Author','Reviewers','State','Checks','Created'].forEach(h => {
     html += `<th>${h}<span class="sort-indicator">⇅</span><div class="resize-handle"></div></th>`;
   });
   html += `</tr></thead><tbody>`;
@@ -416,9 +394,22 @@ function renderPRTable(prs, tableId) {
     const mergeHtml = renderMergeStatus(st.mergeable_state || '');
     const statusHtml = mergeHtml ? checksHtml + '<br>' + mergeHtml : checksHtml;
     const titleDisplay = (st.draft ? '[DRAFT] ' : '') + (pr.title || '');
-    html += `<tr><td class="nowrap">${ghLink(pr.number)}</td><td>${esc(titleDisplay)}</td><td>${esc(pr.author)}</td><td>${reviewHtml}</td><td class="nowrap">${statusHtml}</td><td>${esc(pr.created || pr.updated)}</td></tr>`;
+    const myReview = (st.reviewers || []).find(r => r.user === myUser);
+    const myState = myReview ? myReview.state : '';
+    const stateColors = {approved: '#22c55e', changes_requested: '#ef4444', commented: '#f59e0b', pending: '#6b7280'};
+    const stateLabel = myState.replace('_', ' ') || '—';
+    const stateColor = stateColors[myState] || '#6b7280';
+    const createdAge = (() => {
+      const d = pr.created || pr.updated;
+      if (!d) return '—';
+      const days = Math.floor((new Date() - new Date(d)) / 86400000);
+      if (days === 0) return 'today';
+      if (days === 1) return '1 day ago';
+      return `${days} days ago`;
+    })();
+    html += `<tr><td class="nowrap">${ghLink(pr.number)}</td><td>${esc(titleDisplay)}</td><td>${esc(pr.author)}</td><td>${reviewHtml}</td><td class="nowrap" style="color:${stateColor};">${stateLabel}</td><td class="nowrap">${statusHtml}</td><td class="nowrap">${createdAge}</td></tr>`;
     const comments = (pr.comments || []).slice().sort((a, b) => (b.when || '').localeCompare(a.when || '')).slice(0, 10);
-    html += `<tr class="pr-comments"><td></td><td colspan="5">`;
+    html += `<tr class="pr-comments"><td></td><td colspan="6">`;
     if (comments.length) {
       html += `<details><summary>Show ${comments.length} comments</summary>`;
       comments.forEach(c => { html += `<div class="pr-comment-line"><span class="comment-label">${esc(c.who)} (${esc(c.when)}):</span> "${esc(c.body)}"</div>`; });
@@ -631,6 +622,7 @@ function renderActionItems() {
   }
 
   let html = `<h3>Google Docs</h3>`;
+  html += `<p class="meta">Auto-discovered from Google Docs containing <code>[Dave Action Item]</code> or <code>"Dave: Action Item"</code> tags. Scans docs viewed by you in the last 2 months.</p>`;
   html += renderGroup(open, `Open (${open.length})`, 'action-items-open');
   if (done.length) {
     html += `<details><summary style="cursor:pointer; margin-top:10px; color:#666;">Completed (${done.length})</summary>`;
@@ -638,8 +630,10 @@ function renderActionItems() {
     html += '</details>';
   }
   html += `<h3>Retro Items</h3>`;
+  html += `<p class="meta">Data generated from screenshot of Jira Retroboard.</p>`;
   html += renderRetroItems();
   html += `<h3>Jira</h3>`;
+  html += `<p class="meta">Auto-discovered from OCMUI Jira ticket descriptions and comments containing <code>[Action Item Dave]</code> tags. Weekly scan of recently updated tickets; items persist across runs.</p>`;
   html += renderJiraActionItems();
   return html;
 }
@@ -673,22 +667,43 @@ function renderJiraActionItems() {
 function renderPage() {
   const tsFmt = {weekday:'long',year:'numeric',month:'long',day:'numeric',hour:'numeric',minute:'2-digit',timeZoneName:'short'};
   const ts = D.meta.last_checked ? new Date(D.meta.last_checked).toLocaleString('en-US', tsFmt) : '';
-  const aiTs = D.meta.last_ai_summary ? new Date(D.meta.last_ai_summary).toLocaleString('en-US', tsFmt) : 'N/A';
-  let html = `<h1>Activity Monitor for Dave Taylor</h1><div class="meta">Data fetched: ${ts} &nbsp;|&nbsp; AI summaries: ${aiTs}</div>`;
-  html += `<h2>Jira</h2><div class="section-content">`;
+  let html = `<h1>Activity Monitor</h1><div class="meta">Data fetched: ${ts}</div>`;
+
+  html += `<div class="tab-bar">`;
+  html += `<button class="tab-btn active" data-tab="github">GitHub</button>`;
+  html += `<button class="tab-btn" data-tab="jira">Jira</button>`;
+  html += `<button class="tab-btn" data-tab="actions">Action Items</button>`;
+  html += `</div>`;
+
+  html += `<div class="tab-panel active" id="tab-github">`;
+  html += renderPRs();
+  html += `</div>`;
+
+  html += `<div class="tab-panel" id="tab-jira">`;
   html += renderEpicsTable();
   html += renderQAContact();
   html += renderJiraMentions();
   html += `</div>`;
-  html += `<h2>GitHub</h2><div class="section-content">`;
-  html += renderPRs();
-  html += `</div>`;
-  html += `<h2>Action Items</h2><div class="section-content">`;
+
+  html += `<div class="tab-panel" id="tab-actions">`;
   html += renderActionItems();
   html += `</div>`;
+
   document.getElementById('app').innerHTML = html;
   pruneLocalStorage();
+  initTabs();
   initInteractions();
+}
+
+function initTabs() {
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById('tab-' + btn.getAttribute('data-tab')).classList.add('active');
+    });
+  });
 }
 
 function pruneLocalStorage() {
@@ -733,16 +748,16 @@ function initInteractions() {
     });
   });
 
-  // PR comments show/hide buttons
+  // PR comments expand/collapse buttons — toggles <details> open state
   document.querySelectorAll('.pr-comments-toggle').forEach(btn => {
     btn.addEventListener('click', () => {
       const tableId = btn.getAttribute('data-table');
       const table = document.getElementById(tableId);
       if (!table) return;
-      const commentRows = table.querySelectorAll('tr.pr-comments');
-      const anyVisible = Array.from(commentRows).some(r => !r.classList.contains('hidden'));
-      commentRows.forEach(r => r.classList.toggle('hidden', anyVisible));
-      btn.textContent = anyVisible ? 'Show Comments' : 'Hide Comments';
+      const details = table.querySelectorAll('tr.pr-comments details');
+      const anyOpen = Array.from(details).some(d => d.open);
+      details.forEach(d => d.open = !anyOpen);
+      btn.textContent = anyOpen ? 'Expand Comments' : 'Collapse Comments';
     });
   });
 

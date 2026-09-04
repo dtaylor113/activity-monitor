@@ -466,14 +466,6 @@ print(json.dumps(sorted(teams)))
 " 2>/dev/null)
 [[ -z "$MY_TEAMS" ]] && MY_TEAMS="[]"
 
-# Fetch senior staff team members (for PR triage logic)
-SENIOR_STAFF=$(GITHUB_TOKEN="" gh api "orgs/RedHatInsights/teams/uhc-portal-senior-staff/members" --jq '[.[].login]' 2>/dev/null)
-[[ -z "$SENIOR_STAFF" ]] && SENIOR_STAFF="[]"
-export SENIOR_STAFF
-echo "### SECTION: SENIOR_STAFF"
-echo "$SENIOR_STAFF"
-echo ""
-
 # --- Section 1d: PR lookup for child tickets in Code Review/Review ---
 echo "### SECTION: CHILD_PR_STATUS"
 if ! $JIRA_OK; then echo "{}"; echo ""; else

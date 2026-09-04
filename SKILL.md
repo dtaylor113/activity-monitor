@@ -667,34 +667,21 @@ existing features and produce the full HTML.
   standalone "Epic Status Changes", "Parent Feature Alignment", and "Latest
   Parent Comments" sections. Those sections NO LONGER exist as separate tables.
 
-**GitHub PRs** (split into five tables):
+**GitHub PRs** (split into three tables):
 
 1. **My PRs** — PRs authored by `$GITHUB_USER`
-2. **PRs I'm Reviewing** — PRs where the user needs to act:
-   - Directly requested PRs (individually assigned as reviewer), OR
-   - Team-requested PRs where NO other senior staff member is individually assigned as a reviewer (unclaimed team requests).
+2. **PRs I'm Reviewing** — PRs where the user is individually assigned as a reviewer.
+   Team-only requests (e.g. `uhc-portal-senior-staff`) where the user is NOT
+   individually assigned are excluded — the team rotation will assign someone.
    Sorted by review state priority: pending → commented → changes_requested.
-   Within same priority, sorted by oldest updated first.
-3. **PRs I'm Mentioned In** — PRs where the user was @mentioned in a comment
-   (regardless of reviewer status). Uses a custom table with columns:
-   PR | Title | Author | Mention. The Mention column shows an AI summary line
-   (visible) and raw comment text (collapsible `<details>`). Only the most recent
-   @mention in non-quoted text is captured per PR. A PR can appear in this table
-   AND in another table simultaneously.
-   Data fields: `mention_summary` (AI one-liner) and `mention_raw` (quote-stripped text).
-   Source: `MENTION_COMMENTS` section in gather.sh fetches full comment bodies for
-   mentioned PRs and `assemble.py` finds the most recent comment where `@user`
-   appears in non-quoted lines.
-4. **Senior Staff PRs** — Team-requested PRs where another senior staff member is
-   already individually assigned as a reviewer. These are lower priority since
-   someone else on the team is already responsible for the review.
-5. **PRs I've Approved** — PRs where the user's review state is `approved`.
+   Within same priority, sorted by oldest created first.
+3. **PRs I've Approved** — PRs where the user's review state is `approved`.
 
 The filter uses `pr_status[N].reviewers` to determine membership. Team-based review
 requests are resolved by fetching the user's GitHub teams (`user/teams` endpoint) and
 adding the user as "pending" with a `via_team` field when a requested team matches.
-The senior staff member list is stored in `meta.senior_staff` (fetched from the
-`uhc-portal-senior-staff` GitHub team at gather time via `$SENIOR_STAFF` env var).
+PRs where the user appears only via a team request (i.e., `via_team` is set and no
+individual assignment exists) are excluded from "PRs I'm Reviewing".
 
 **Review state upgrade from issue comments:** If a reviewer's formal review state is
 `pending` (no review submitted via GitHub's review UI) but they have left general
@@ -702,14 +689,15 @@ issue comments on the PR, their state is upgraded to `commented`. This ensures t
 dashboard accurately reflects engagement even when reviewers use general comments
 instead of the formal "Submit review" workflow.
 
-Columns: PR | Title | Author | Reviewers | Checks | Status | Created
+Columns: PR | Title | Author | Reviewers | Checks | Created
 - Title = full PR title (includes Jira ticket ID prefix, e.g. "OCMUI-4330: ...")
 - Author = GitHub username who opened the PR
-- Reviewers = individual reviewers with colored status (approved/changes_requested/commented/pending)
+- Reviewers = individual reviewers with colored status (approved/changes_requested/commented/pending).
+  Includes inline "awaiting author" badge when user requested changes and author hasn't pushed.
+  Includes 🛡️QA badge when reviewer is the QA Contact for the associated Jira ticket.
 - Checks = CI status (passing/failing/pending) + merge status (mergeable/blocked/conflicts/unstable)
-- Status = compact badge showing ball-in-court (e.g., "Awaiting author", "Needs your re-review", "Approved", "Pending"). Color-coded: red for action needed, yellow for waiting, green for approved, gray for pending.
 - Created = date PR was opened (oldest PRs surface first for attention)
-- Comment sub-rows beneath each PR (collapsible `<details>` element)
+- Comment sub-rows beneath each PR (initially collapsed; "Expand Comments" button expands all in section)
   showing up to 10 most recent non-bot comments from three sources: issue comments,
   review thread comments (both resolved and unresolved), and formal review body text.
   Bodies truncated to 500 chars.
