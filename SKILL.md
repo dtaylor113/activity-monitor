@@ -122,6 +122,9 @@ how the user triggers the skill ("regather and run", "catch me up", "been away",
 **JIRAs I'm Mentioned In:**
 
 - bullet per unanswered Jira mention
+- **Skip dismissed/acked mentions**: filter out any key in `dismissed_jira_mentions`
+  from `activity-data.js`. These are mentions the user already acknowledged via
+  the Ack checkbox in the HTML dashboard.
 
 ---
 
