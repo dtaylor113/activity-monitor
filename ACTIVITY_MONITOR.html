@@ -381,7 +381,7 @@ function renderPRTable(prs, tableId) {
   const myUser = D.meta.github_user;
   const qaTicketKeys = new Set((D.qa_contact || []).map(q => q.key));
   let html = `<table id="${tableId}"><thead><tr>`;
-  ['PR','Title','Author','Reviewers','State','Checks','Created'].forEach(h => {
+  ['PR','Title','Author','Reviewers','My State','Checks','Created'].forEach(h => {
     html += `<th>${h}<span class="sort-indicator">⇅</span><div class="resize-handle"></div></th>`;
   });
   html += `</tr></thead><tbody>`;
@@ -396,9 +396,13 @@ function renderPRTable(prs, tableId) {
     const titleDisplay = (st.draft ? '[DRAFT] ' : '') + (pr.title || '');
     const myReview = (st.reviewers || []).find(r => r.user === myUser);
     const myState = myReview ? myReview.state : '';
+    const badgeColors = {'Awaiting review': '#6b7280', 'Changes requested': '#ef4444', 'Awaiting author': '#f59e0b', 'Approved': '#22c55e', 'Pending': '#6b7280'};
     const stateColors = {approved: '#22c55e', changes_requested: '#ef4444', commented: '#f59e0b', pending: '#6b7280'};
-    const stateLabel = myState.replace('_', ' ') || '—';
-    const stateColor = stateColors[myState] || '#6b7280';
+    const isMyPR = pr.author === myUser;
+    const stateLabel = isMyPR ? (pr.status_badge || '—') : (myState.replace('_', ' ') || '—');
+    const stateColor = isMyPR
+      ? (Object.entries(badgeColors).find(([k]) => (pr.status_badge || '').toLowerCase().includes(k.toLowerCase())) || [,'#6b7280'])[1]
+      : (stateColors[myState] || '#6b7280');
     const createdAge = (() => {
       const d = pr.created || pr.updated;
       if (!d) return '—';
@@ -408,11 +412,28 @@ function renderPRTable(prs, tableId) {
       return `${days} days ago`;
     })();
     html += `<tr><td class="nowrap">${ghLink(pr.number)}</td><td>${esc(titleDisplay)}</td><td>${esc(pr.author)}</td><td>${reviewHtml}</td><td class="nowrap" style="color:${stateColor};">${stateLabel}</td><td class="nowrap">${statusHtml}</td><td class="nowrap">${createdAge}</td></tr>`;
-    const comments = (pr.comments || []).slice().sort((a, b) => (b.when || '').localeCompare(a.when || '')).slice(0, 10);
+    const comments = (pr.comments || []).slice().sort((a, b) => (b.when || '').localeCompare(a.when || ''));
     html += `<tr class="pr-comments"><td></td><td colspan="6">`;
     if (comments.length) {
+      const pageSize = 10;
+      const detailId = `comments-${tableId}-${pr.number}`;
       html += `<details><summary>Show ${comments.length} comments</summary>`;
-      comments.forEach(c => { html += `<div class="pr-comment-line"><span class="comment-label">${esc(c.who)} (${esc(c.when)}):</span> "${esc(c.body)}"</div>`; });
+      html += `<table id="${detailId}" style="width:100%;border-collapse:collapse;font-size:11px;margin:4px 0 0;"><tbody>`;
+      let lastDate = '';
+      comments.forEach((c, i) => {
+        const showDate = c.when !== lastDate;
+        lastDate = c.when;
+        const hidden = i >= pageSize;
+        html += `<tr style="vertical-align:top;${hidden ? 'display:none;' : ''}"${hidden ? ' data-page-hidden="1"' : ''}>`;
+        html += `<td style="color:#6b7280;white-space:nowrap;padding:${showDate ? '6px' : '2px'} 8px 2px 0;border:none;">${showDate ? esc(c.when) : ''}</td>`;
+        html += `<td style="color:#60a5fa;font-weight:600;white-space:nowrap;padding:${showDate ? '6px' : '2px'} 8px 2px 0;border:none;">${esc(c.who)}</td>`;
+        html += `<td style="color:#9ca3af;padding:${showDate ? '6px' : '2px'} 0 2px 0;border:none;">${esc(c.body)}</td>`;
+        html += `</tr>`;
+      });
+      html += `</tbody></table>`;
+      if (comments.length > pageSize) {
+        html += `<button class="load-more-comments" data-target="${detailId}" data-page-size="${pageSize}" style="margin:6px 0;background:rgba(165,180,252,0.12);border:1px solid rgba(165,180,252,0.3);color:#a5b4fc;font-size:11px;padding:3px 10px;border-radius:3px;cursor:pointer;">Load more (${comments.length - pageSize} remaining)</button>`;
+      }
       html += `</details>`;
     }
     html += `</td></tr>`;
@@ -744,6 +765,24 @@ function initInteractions() {
         toggle.classList.toggle('open');
         detailRow.classList.toggle('open');
         detailRow.style.display = detailRow.classList.contains('open') ? '' : 'none';
+      }
+    });
+  });
+
+  // Load more comments pagination
+  document.querySelectorAll('.load-more-comments').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const table = document.getElementById(btn.getAttribute('data-target'));
+      if (!table) return;
+      const pageSize = parseInt(btn.getAttribute('data-page-size'));
+      const hiddenRows = Array.from(table.querySelectorAll('tr[data-page-hidden="1"]'));
+      const toShow = hiddenRows.slice(0, pageSize);
+      toShow.forEach(r => { r.style.display = ''; r.removeAttribute('data-page-hidden'); });
+      const remaining = hiddenRows.length - toShow.length;
+      if (remaining > 0) {
+        btn.textContent = `Load more (${remaining} remaining)`;
+      } else {
+        btn.remove();
       }
     });
   });

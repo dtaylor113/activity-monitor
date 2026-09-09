@@ -246,7 +246,7 @@ def assemble(raw, output_dir):
             })
     for num, comments in pr_comments_by_num.items():
         if num in pr_map:
-            pr_map[num]['comments'] = sorted(comments, key=lambda x: x['when'], reverse=True)[:12]
+            pr_map[num]['comments'] = sorted(comments, key=lambda x: x['when'], reverse=True)[:30]
 
     # Add approved PRs that aren't already in pr_map
     for pr in approved_reviews:
@@ -269,13 +269,11 @@ def assemble(raw, output_dir):
             cpr['reviewers'] = [r for r in cpr.get('reviewers', []) if r['user'] not in bot_users]
 
     # Assemble data
-    senior_staff = ['zherman0', 'lizagilman', 'jmekkatt']
     data = {
         'meta': {
             'last_checked': datetime.now().astimezone().isoformat(),
             'lookback_days': 3,
-            'github_user': github_user,
-            'senior_staff': senior_staff
+            'github_user': github_user
         },
         'epics': epics,
         'parent_alignment': parent_alignment,
