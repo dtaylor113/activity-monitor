@@ -343,7 +343,7 @@ function renderPRs() {
       const st = D.pr_status && D.pr_status[pr.number];
       return st && st.draft;
     });
-    html += `<h3>My PRs <button class="pr-comments-toggle" data-table="my-prs-table">Expand Comments</button>`;
+    html += `<h3>My PRs <button class="pr-comments-toggle" data-table="my-prs-table">Expand Comments</button> <label style="font-weight:normal;font-size:12px;cursor:pointer;margin-left:6px;"><input type="checkbox" class="my-comments-filter" data-table="my-prs-table" style="vertical-align:middle;margin-right:3px;">Only my comments</label>`;
     if (draftPRs.length) {
       html += ` <button class="draft-toggle" data-draft-table="my-draft-prs-table">Show Draft PRs (${draftPRs.length})</button>`;
     }
@@ -357,13 +357,13 @@ function renderPRs() {
   }
 
   if (directReviewPRs.length) {
-    html += `<h3>PRs I'm Reviewing <button class="pr-comments-toggle" data-table="reviewing-prs-table">Expand Comments</button></h3>`;
+    html += `<h3>PRs I'm Reviewing <button class="pr-comments-toggle" data-table="reviewing-prs-table">Expand Comments</button> <label style="font-weight:normal;font-size:12px;cursor:pointer;margin-left:6px;"><input type="checkbox" class="my-comments-filter" data-table="reviewing-prs-table" style="vertical-align:middle;margin-right:3px;">Only my comments</label></h3>`;
     html += renderPRTable(directReviewPRs, 'reviewing-prs-table');
   }
 
   if (approvedPRs.length) {
     html += `<details><summary style="cursor:pointer;"><h3 style="display:inline;">PRs I've Approved (${approvedPRs.length})</h3></summary>`;
-    html += `<button class="pr-comments-toggle" data-table="approved-prs-table" style="margin:8px 0;">Expand Comments</button>`;
+    html += `<button class="pr-comments-toggle" data-table="approved-prs-table" style="margin:8px 0;">Expand Comments</button> <label style="font-weight:normal;font-size:12px;cursor:pointer;margin-left:6px;"><input type="checkbox" class="my-comments-filter" data-table="approved-prs-table" style="vertical-align:middle;margin-right:3px;">Only my comments</label>`;
     html += renderPRTable(approvedPRs, 'approved-prs-table');
     html += `</details>`;
   } else {
@@ -424,7 +424,7 @@ function renderPRTable(prs, tableId) {
         const showDate = c.when !== lastDate;
         lastDate = c.when;
         const hidden = i >= pageSize;
-        html += `<tr style="vertical-align:top;${hidden ? 'display:none;' : ''}"${hidden ? ' data-page-hidden="1"' : ''}>`;
+        html += `<tr data-comment-user="${esc(c.who)}" style="vertical-align:top;${hidden ? 'display:none;' : ''}"${hidden ? ' data-page-hidden="1"' : ''}>`;
         html += `<td style="color:#6b7280;white-space:nowrap;padding:${showDate ? '6px' : '2px'} 8px 2px 0;border:none;">${showDate ? esc(c.when) : ''}</td>`;
         html += `<td style="color:#60a5fa;font-weight:600;white-space:nowrap;padding:${showDate ? '6px' : '2px'} 8px 2px 0;border:none;">${esc(c.who)}</td>`;
         html += `<td style="color:#9ca3af;padding:${showDate ? '6px' : '2px'} 0 2px 0;border:none;">${esc(c.body)}</td>`;
@@ -766,6 +766,52 @@ function initInteractions() {
         detailRow.classList.toggle('open');
         detailRow.style.display = detailRow.classList.contains('open') ? '' : 'none';
       }
+    });
+  });
+
+  // "Only my comments" filter checkboxes (per section, applies to all PRs in table)
+  document.querySelectorAll('.my-comments-filter').forEach(cb => {
+    cb.addEventListener('change', () => {
+      const tableId = cb.getAttribute('data-table');
+      const table = document.getElementById(tableId);
+      if (!table) return;
+      const myUser = D.meta.github_user;
+      const filtered = cb.checked;
+      // Process each PR's comment table
+      table.querySelectorAll('tr.pr-comments').forEach(commentRow => {
+        const innerTable = commentRow.querySelector('table[id]');
+        if (!innerTable) return;
+        const rows = innerTable.querySelectorAll('tr[data-comment-user]');
+        let anyVisible = false;
+        rows.forEach(r => {
+          const isPageHidden = r.hasAttribute('data-page-hidden');
+          if (filtered) {
+            const isMine = r.getAttribute('data-comment-user') === myUser;
+            r.style.display = isMine ? '' : 'none';
+            if (isMine) anyVisible = true;
+          } else {
+            r.style.display = isPageHidden ? 'none' : '';
+            if (!isPageHidden) anyVisible = true;
+          }
+        });
+        // Show/hide "no comments" message
+        let noMsg = innerTable.parentElement.querySelector('.no-my-comments');
+        if (filtered && !anyVisible) {
+          if (!noMsg) {
+            noMsg = document.createElement('div');
+            noMsg.className = 'no-my-comments';
+            noMsg.style.cssText = 'color:#6b7280;font-size:11px;font-style:italic;padding:4px 0;';
+            noMsg.textContent = 'No comments from you on this PR.';
+            innerTable.parentElement.insertBefore(noMsg, innerTable.nextSibling);
+          }
+          noMsg.style.display = '';
+        } else if (noMsg) {
+          noMsg.style.display = 'none';
+        }
+        // Hide/show load more button when filtered
+        const loadBtn = innerTable.parentElement.querySelector('.load-more-comments');
+        if (loadBtn) loadBtn.style.display = filtered ? 'none' : '';
+      });
     });
   });
 
