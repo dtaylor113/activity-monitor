@@ -118,7 +118,14 @@ tr.pr-comments td { background: #0d0d1a; border-top: none; padding: 3px 10px 6px
 </head>
 <body>
 <div id="app"></div>
-<script src="activity-data.js"></script>
+<script>
+(function(){
+  var s = document.createElement('script');
+  s.src = 'activity-data.js?t=' + Date.now();
+  s.onload = function(){ renderPage(); };
+  document.head.appendChild(s);
+})();
+</script>
 <script>
 const JIRA = 'https://redhat.atlassian.net/browse/';
 const GH = 'https://github.com/RedHatInsights/uhc-portal/pull/';
@@ -343,11 +350,11 @@ function renderPRs() {
       const st = D.pr_status && D.pr_status[pr.number];
       return st && st.draft;
     });
-    html += `<h3>My PRs <button class="pr-comments-toggle" data-table="my-prs-table">Expand Comments</button> <label style="font-weight:normal;font-size:12px;cursor:pointer;margin-left:6px;"><input type="checkbox" class="my-comments-filter" data-table="my-prs-table" style="vertical-align:middle;margin-right:3px;">Only my comments</label>`;
+    html += `<h3>My PRs <button class="pr-comments-toggle" data-table="my-prs-table">Expand Comments</button>`;
     if (draftPRs.length) {
       html += ` <button class="draft-toggle" data-draft-table="my-draft-prs-table">Show Draft PRs (${draftPRs.length})</button>`;
     }
-    html += `</h3>`;
+    html += ` <label style="font-weight:normal;font-size:12px;cursor:pointer;margin-left:6px;"><input type="checkbox" class="my-comments-filter" data-table="my-prs-table" style="vertical-align:middle;margin-right:3px;">Only my comments</label></h3>`;
     html += renderPRTable(nonDraftPRs, 'my-prs-table');
     if (draftPRs.length) {
       html += `<div id="my-draft-prs-table-wrap" style="display:none;">`;
@@ -1035,7 +1042,6 @@ function applyFilters() {
   });
 }
 
-renderPage();
 </script>
 </body>
 </html>
