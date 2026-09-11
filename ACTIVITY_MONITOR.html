@@ -302,8 +302,7 @@ function renderPRs() {
   const myUser = D.meta.github_user;
   const myPRs = D.prs.filter(pr => pr.author === myUser);
 
-  // Only PRs where I'm individually requested (not via team)
-  const directReviewPRs = [];
+  const reviewPRs = [];
   const approvedPRs = [];
 
   D.prs.forEach(pr => {
@@ -318,13 +317,10 @@ function renderPRs() {
       return;
     }
 
-    // Skip team-only requests — only show individually assigned
-    if (myReview.via_team) return;
-
-    directReviewPRs.push(pr);
+    reviewPRs.push(pr);
   });
 
-  directReviewPRs.sort((a, b) => {
+  reviewPRs.sort((a, b) => {
     const stA = (D.pr_status && D.pr_status[a.number]) || {};
     const stB = (D.pr_status && D.pr_status[b.number]) || {};
     const myRevA = (stA.reviewers || []).find(r => r.user === myUser);
@@ -363,9 +359,9 @@ function renderPRs() {
     }
   }
 
-  if (directReviewPRs.length) {
+  if (reviewPRs.length) {
     html += `<h3>PRs I'm Reviewing <button class="pr-comments-toggle" data-table="reviewing-prs-table">Expand Comments</button> <label style="font-weight:normal;font-size:12px;cursor:pointer;margin-left:6px;"><input type="checkbox" class="my-comments-filter" data-table="reviewing-prs-table" style="vertical-align:middle;margin-right:3px;">Only my comments</label></h3>`;
-    html += renderPRTable(directReviewPRs, 'reviewing-prs-table');
+    html += renderPRTable(reviewPRs, 'reviewing-prs-table');
   }
 
   if (approvedPRs.length) {
@@ -377,7 +373,7 @@ function renderPRs() {
     html += `<h3>PRs I've Approved</h3><p class="meta">It's all good.</p>`;
   }
 
-  if (!myPRs.length && !directReviewPRs.length && !approvedPRs.length) {
+  if (!myPRs.length && !reviewPRs.length && !approvedPRs.length) {
     html += `<h3>PRs Needing My Attention</h3><div style="color:#6b7280;">No open PRs needing attention.</div>`;
   }
 
@@ -428,11 +424,12 @@ function renderPRTable(prs, tableId) {
       html += `<table id="${detailId}" style="width:100%;border-collapse:collapse;font-size:11px;margin:4px 0 0;"><tbody>`;
       let lastDate = '';
       comments.forEach((c, i) => {
-        const showDate = c.when !== lastDate;
-        lastDate = c.when;
+        const dateOnly = (c.when || '').slice(0, 10);
+        const showDate = dateOnly !== lastDate;
+        lastDate = dateOnly;
         const hidden = i >= pageSize;
         html += `<tr data-comment-user="${esc(c.who)}" style="vertical-align:top;${hidden ? 'display:none;' : ''}"${hidden ? ' data-page-hidden="1"' : ''}>`;
-        html += `<td style="color:#6b7280;white-space:nowrap;padding:${showDate ? '6px' : '2px'} 8px 2px 0;border:none;">${showDate ? esc(c.when) : ''}</td>`;
+        html += `<td style="color:#6b7280;white-space:nowrap;padding:${showDate ? '6px' : '2px'} 8px 2px 0;border:none;">${showDate ? esc(dateOnly) : ''}</td>`;
         html += `<td style="color:#60a5fa;font-weight:600;white-space:nowrap;padding:${showDate ? '6px' : '2px'} 8px 2px 0;border:none;">${esc(c.who)}</td>`;
         html += `<td style="color:#9ca3af;padding:${showDate ? '6px' : '2px'} 0 2px 0;border:none;">${esc(c.body)}</td>`;
         html += `</tr>`;

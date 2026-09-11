@@ -14,7 +14,7 @@ import json
 import re
 import sys
 import os
-from datetime import datetime, date
+from datetime import datetime
 
 
 def extract_section(raw, name):
@@ -33,26 +33,6 @@ def parse_json_safe(content, default=None):
             return json.loads('{' + content.lstrip('{').rstrip('}') + '}')
         except Exception:
             return default if default is not None else {}
-
-
-def age_label(date_str):
-    """Return a human-readable age label like '@ 3 days ago'."""
-    if not date_str:
-        return ''
-    try:
-        d = datetime.strptime(date_str[:10], '%Y-%m-%d').date()
-    except (ValueError, TypeError):
-        return ''
-    days = (date.today() - d).days
-    if days <= 0:
-        return '@ today'
-    if days == 1:
-        return '@ 1 day ago'
-    if days < 14:
-        return f'@ {days} days ago'
-    if days < 60:
-        return f'@ ~{days // 7} weeks ago'
-    return f'@ ~{days // 30} months ago'
 
 
 def generate_pr_status_badge(pr, pr_st, github_user):
@@ -136,7 +116,7 @@ def load_previous_ai(output_dir):
     try:
         with open(path) as f:
             content = f.read()
-        # Support both "const D = {...}" and "window.ACTIVITY_DATA = {...}" formats
+        # Parse JSON from either "const D = {...}" format
         start = content.index('{')
         end = content.rindex('}') + 1
         return json.loads(content[start:end])
@@ -241,7 +221,7 @@ def assemble(raw, output_dir):
         if num:
             pr_comments_by_num.setdefault(num, []).append({
                 'who': c.get('user', ''),
-                'when': c.get('updated_at', '')[:10],
+                'when': c.get('updated_at', ''),
                 'body': c.get('body', '')[:500]
             })
     for num, comments in pr_comments_by_num.items():
@@ -312,11 +292,6 @@ def assemble(raw, output_dir):
             if pe.get('uber_ai') and 'uber_ai' not in epic:
                 epic['uber_ai'] = pe['uber_ai']
 
-        # PR status badges — always regenerate (they're deterministic and cheap)
-        prev_prs = {p['number']: p for p in prev.get('prs', []) if isinstance(p, dict)}
-        for pr in data['prs']:
-            pass  # status_badge is always regenerated below, no need to preserve
-
         # Epic children AI summaries
         prev_children = prev.get('epic_children', {})
         for ek, ch in data['epic_children'].items():
@@ -370,7 +345,6 @@ def assemble(raw, output_dir):
     for pr in data['prs']:
         pr_st = pr_status.get(str(pr['number']))
         pr['status_badge'] = generate_pr_status_badge(pr, pr_st, github_user)
-        pr.pop('ai_summary', None)
 
     # Write output
     output_path = os.path.join(output_dir, 'activity-data.js')

@@ -65,38 +65,15 @@ fi
 echo "=== ACTIVITY MONITOR (since $SINCE_DATE, ${LOOKBACK_DAYS}d lookback) ==="
 echo ""
 
-# Pre-fetch the current user's team slugs (cached for all PR sections)
-# Uses GITHUB_TOKEN="" to prefer keyring token which has read:org scope
-MY_TEAMS=$(GITHUB_TOKEN="" gh api --paginate "user/teams" --jq '[.[].slug]' 2>/dev/null | python3 -c "
-import sys, json
-teams = set()
-for line in sys.stdin:
-    line = line.strip()
-    if line:
-        try: teams.update(json.loads(line))
-        except: pass
-print(json.dumps(sorted(teams)))
-" 2>/dev/null)
-[[ -z "$MY_TEAMS" ]] && MY_TEAMS="[]"
-
 # =====================================================
 # GITHUB PR SECTIONS (run first - populates GitHub tab)
 # =====================================================
 
-# --- Section 2: PRs involving me (recent activity) ---
-sleep 2
-echo "### SECTION: PR_ACTIVITY"
-gh api --method GET search/issues \
-  -f "q=repo:${REPO} is:pr involves:${GITHUB_USER} updated:>${SINCE_DATE}" \
-  -F per_page=20 \
-  --jq '[.items[] | {number, title: .title, state, updated_at, author: .user.login}]' 2>/dev/null || echo "[]"
-echo ""
-
-# --- Section 3: Review requests for me ---
+# --- Review requests for me ---
 echo "### SECTION: REVIEW_REQUESTS"
 REVIEW_REQUESTS_JSON=$(gh api --method GET search/issues \
-  -f "q=repo:${REPO} is:pr is:open review-requested:${GITHUB_USER}" \
-  -F per_page=10 \
+  -f "q=repo:${REPO} is:pr is:open user-review-requested:${GITHUB_USER}" \
+  -F per_page=30 \
   --jq '[.items[] | {number, title: .title, author: .user.login, updated_at, created_at}]' 2>/dev/null || echo "[]")
 echo "$REVIEW_REQUESTS_JSON"
 REVIEW_REQUEST_NUMS=$(echo "$REVIEW_REQUESTS_JSON" | python3 -c "import sys,json; print(' '.join(str(p['number']) for p in json.load(sys.stdin)))" 2>/dev/null)
@@ -106,7 +83,7 @@ echo ""
 echo "### SECTION: STALE_REVIEWS"
 STALE_REVIEWS_JSON=$(gh api --method GET search/issues \
   -f "q=repo:${REPO} is:pr is:open reviewed-by:${GITHUB_USER} -review:approved -author:${GITHUB_USER}" \
-  -F per_page=10 \
+  -F per_page=30 \
   --jq '[.items[] | {number, title: .title, author: .user.login, updated_at, created_at}]' 2>/dev/null || echo "[]")
 echo "$STALE_REVIEWS_JSON"
 STALE_REVIEW_NUMS=$(echo "$STALE_REVIEWS_JSON" | python3 -c "import sys,json; print(' '.join(str(p['number']) for p in json.load(sys.stdin)))" 2>/dev/null)
@@ -114,7 +91,7 @@ STALE_REVIEW_NUMS=$(echo "$STALE_REVIEWS_JSON" | python3 -c "import sys,json; pr
 # PRs I've approved that are still open
 APPROVED_REVIEWS_JSON=$(gh api --method GET search/issues \
   -f "q=repo:${REPO} is:pr is:open review:approved reviewed-by:${GITHUB_USER} -author:${GITHUB_USER}" \
-  -F per_page=10 \
+  -F per_page=30 \
   --jq '[.items[] | {number, title: .title, author: .user.login, updated_at, created_at}]' 2>/dev/null || echo "[]")
 echo "### SECTION: APPROVED_REVIEWS"
 echo "$APPROVED_REVIEWS_JSON"
@@ -136,7 +113,6 @@ sleep 2
 echo "### SECTION: PR_COMMENTS"
 ALL_PR_NUMS=$(echo "$REVIEW_REQUEST_NUMS $STALE_REVIEW_NUMS $APPROVED_REVIEW_NUMS $MY_PR_NUMS" | tr ' ' '\n' | sort -un | tr '\n' ' ')
 
-BOTS="codecov|coderabbitai|github-actions|dependabot"
 echo "["
 FIRST=true
 for PR_NUM in $ALL_PR_NUMS; do
@@ -183,7 +159,7 @@ if r.returncode == 0 and r.stdout.strip():
             all_comments.append({
                 'user': author,
                 'body': c.get('body','')[:500],
-                'updated_at': c.get('createdAt','')[:10]
+                'updated_at': c.get('createdAt','')
             })
 
 # Review body text (formal review submissions with non-empty body)
@@ -204,7 +180,7 @@ if r.returncode == 0 and r.stdout.strip():
         all_comments.append({
             'user': rev['user'],
             'body': prefix + rev.get('body', '')[:800],
-            'updated_at': (rev.get('updated_at') or '')[:10]
+            'updated_at': (rev.get('updated_at') or '')
         })
 
 # Filter bots, sort by date, take last 15
@@ -240,22 +216,19 @@ import subprocess, json, os
 pr_num = ${PR_NUM}
 repo = '${REPO}'
 github_user = os.environ['GITHUB_USER']
-my_teams = json.loads('${MY_TEAMS}')
 
-# Get PR author + requested reviewers + requested teams + mergeable state + head SHA
+# Get PR author + requested reviewers + mergeable state + head SHA
 pr_author = ''
 mergeable_state = 'unknown'
 requested = []
-requested_teams = []
 is_draft = False
 head_sha = ''
 try:
-    r = subprocess.run(['gh', 'api', f'repos/{repo}/pulls/{pr_num}', '--jq', '{author: .user.login, requested: [.requested_reviewers[].login], requested_teams: [.requested_teams[].slug], mergeable_state: .mergeable_state, draft: .draft, head_sha: .head.sha}'], capture_output=True, text=True, timeout=15)
+    r = subprocess.run(['gh', 'api', f'repos/{repo}/pulls/{pr_num}', '--jq', '{author: .user.login, requested: [.requested_reviewers[].login], mergeable_state: .mergeable_state, draft: .draft, head_sha: .head.sha}'], capture_output=True, text=True, timeout=15)
     if r.returncode == 0 and r.stdout.strip():
         pr_data = json.loads(r.stdout)
         pr_author = pr_data.get('author', '')
         requested = pr_data.get('requested', [])
-        requested_teams = pr_data.get('requested_teams', [])
         mergeable_state = pr_data.get('mergeable_state', 'unknown')
         is_draft = pr_data.get('draft', False)
         head_sha = pr_data.get('head_sha', '')
@@ -283,7 +256,7 @@ try:
             if state in ('APPROVED', 'CHANGES_REQUESTED'):
                 reviewer_state[user] = state
             elif state == 'COMMENTED':
-                if user not in reviewer_state or reviewer_state[user] == 'COMMENTED':
+                if user not in reviewer_state or reviewer_state[user] in ('COMMENTED', 'CHANGES_REQUESTED'):
                     reviewer_state[user] = 'COMMENTED'
             elif state == 'DISMISSED':
                 reviewer_state[user] = 'COMMENTED'
@@ -304,12 +277,6 @@ for user in requested:
             if rv['user'] == user:
                 rv['state'] = 'pending'
                 break
-
-# Add current user as pending if they are in a requested team but not already listed
-if github_user != pr_author and github_user not in existing_users:
-    matched_teams = [t for t in requested_teams if t in my_teams]
-    if matched_teams:
-        reviewers.append({'user': github_user, 'state': 'pending', 'via_team': matched_teams[0]})
 
 # Upgrade "pending" reviewers to "commented" if they left issue comments
 try:
@@ -748,7 +715,6 @@ import sys, json, subprocess, os
 
 REPO = '${REPO}'
 github_user = os.environ['GITHUB_USER']
-my_teams = json.loads('${MY_TEAMS}') if '${MY_TEAMS}' != '' else []
 
 # Try to get child keys from Jira; if the linkedIssuesOf JQL fails, fall back to simpler query
 try:
@@ -804,22 +770,20 @@ for key in child_keys:
             continue
         pr_num = pr_info['number']
 
-        # Get PR author + requested reviewers + requested teams + mergeable state
+        # Get PR author + requested reviewers + mergeable state
         pr_author = ''
         mergeable_state = 'unknown'
         requested = []
-        requested_teams = []
         try:
             req_result = subprocess.run(
                 ['gh', 'api', f'repos/{REPO}/pulls/{pr_num}',
-                 '--jq', '{author: .user.login, requested: [.requested_reviewers[].login], requested_teams: [.requested_teams[].slug], mergeable_state: .mergeable_state}'],
+                 '--jq', '{author: .user.login, requested: [.requested_reviewers[].login], mergeable_state: .mergeable_state}'],
                 capture_output=True, text=True, timeout=15
             )
             if req_result.returncode == 0 and req_result.stdout.strip():
                 pr_extra = json.loads(req_result.stdout)
                 pr_author = pr_extra.get('author', '')
                 requested = pr_extra.get('requested', [])
-                requested_teams = pr_extra.get('requested_teams', [])
                 mergeable_state = pr_extra.get('mergeable_state', 'unknown')
         except: pass
 
@@ -849,7 +813,7 @@ for key in child_keys:
                 if state in ('APPROVED', 'CHANGES_REQUESTED'):
                     reviewer_state[user] = state
                 elif state == 'COMMENTED':
-                    if user not in reviewer_state or reviewer_state[user] == 'COMMENTED':
+                    if user not in reviewer_state or reviewer_state[user] in ('COMMENTED', 'CHANGES_REQUESTED'):
                         reviewer_state[user] = 'COMMENTED'
                 elif state == 'DISMISSED':
                     reviewer_state[user] = 'COMMENTED'
@@ -870,11 +834,6 @@ for key in child_keys:
                     if rv['user'] == u:
                         rv['state'] = 'pending'
                         break
-        # Add current user as pending if in a requested team but not already listed
-        if github_user != pr_author and github_user not in existing:
-            matched_teams = [t for t in requested_teams if t in my_teams]
-            if matched_teams:
-                reviewers.append({'user': github_user, 'state': 'pending', 'via_team': matched_teams[0]})
 
         # Get last 8 unresolved non-bot comments (issue + review via GraphQL)
         comments = []
@@ -883,7 +842,7 @@ for key in child_keys:
         # Issue comments
         comments_result = subprocess.run(
             ['gh', 'api', f'repos/{REPO}/issues/{pr_num}/comments',
-             '--jq', '[.[] | {user: .user.login, body: .body[:150], created_at: .created_at[:10]}]'],
+             '--jq', '[.[] | {user: .user.login, body: .body[:150], created_at: .created_at}]'],
             capture_output=True, text=True, timeout=15
         )
         if comments_result.returncode == 0 and comments_result.stdout.strip():
@@ -907,7 +866,7 @@ for key in child_keys:
                     comments.append({
                         'user': (c.get('author') or {}).get('login',''),
                         'body': c.get('body','')[:150],
-                        'created_at': (c.get('createdAt') or '')[:10]
+                        'created_at': (c.get('createdAt') or '')
                     })
 
         # Filter bots, sort by date, take last 8
