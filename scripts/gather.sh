@@ -118,11 +118,12 @@ FIRST=true
 for PR_NUM in $ALL_PR_NUMS; do
   [[ -z "$PR_NUM" ]] && continue
   COMMENTS=$(python3 -c "
-import subprocess, json
+import subprocess, json, sys
+sys.path.insert(0, '$(dirname "$0")')
+from lib.shared import GITHUB_BOT_USERS
 pr_num = ${PR_NUM}
 repo = '${REPO}'
 owner, name = repo.split('/')
-bots = {'codecov[bot]', 'coderabbitai[bot]', 'github-actions[bot]', 'dependabot[bot]', 'codecov', 'coderabbitai'}
 all_comments = []
 
 # Issue comments (general PR conversation — these are never 'resolved')
@@ -169,7 +170,7 @@ r = subprocess.run(['gh', 'api', f'repos/{repo}/pulls/{pr_num}/reviews',
 if r.returncode == 0 and r.stdout.strip():
     reviews = json.loads(r.stdout)
     for rev in reviews:
-        if rev.get('user') in bots:
+        if rev.get('user') in GITHUB_BOT_USERS:
             continue
         state = rev.get('state', '')
         prefix = ''
@@ -183,8 +184,8 @@ if r.returncode == 0 and r.stdout.strip():
             'updated_at': (rev.get('updated_at') or '')
         })
 
-# Filter bots, sort by date, take last 15
-all_comments = [c for c in all_comments if c.get('user') not in bots]
+# Filter bots, sort by date, take last 30
+all_comments = [c for c in all_comments if c.get('user') not in GITHUB_BOT_USERS]
 all_comments.sort(key=lambda c: c.get('updated_at', ''))
 all_comments = all_comments[-30:]
 
@@ -212,93 +213,30 @@ FIRST=true
 for PR_NUM in $ALL_PR_NUMS; do
   [[ -z "$PR_NUM" ]] && continue
   STATUS=$(python3 -c "
-import subprocess, json, os
+import subprocess, json, os, sys
+sys.path.insert(0, '$(dirname "$0")')
+from lib.shared import resolve_reviewers, get_checks_status
 pr_num = ${PR_NUM}
 repo = '${REPO}'
 github_user = os.environ['GITHUB_USER']
 
-# Get PR author + requested reviewers + mergeable state + head SHA
-pr_author = ''
+# Get PR details
 mergeable_state = 'unknown'
 requested = []
 is_draft = False
 head_sha = ''
 try:
-    r = subprocess.run(['gh', 'api', f'repos/{repo}/pulls/{pr_num}', '--jq', '{author: .user.login, requested: [.requested_reviewers[].login], mergeable_state: .mergeable_state, draft: .draft, head_sha: .head.sha}'], capture_output=True, text=True, timeout=15)
+    r = subprocess.run(['gh', 'api', f'repos/{repo}/pulls/{pr_num}', '--jq', '{requested: [.requested_reviewers[].login], mergeable_state: .mergeable_state, draft: .draft, head_sha: .head.sha}'], capture_output=True, text=True, timeout=15)
     if r.returncode == 0 and r.stdout.strip():
         pr_data = json.loads(r.stdout)
-        pr_author = pr_data.get('author', '')
         requested = pr_data.get('requested', [])
         mergeable_state = pr_data.get('mergeable_state', 'unknown')
         is_draft = pr_data.get('draft', False)
         head_sha = pr_data.get('head_sha', '')
 except: pass
 
-# Reviews — paginate to get ALL reviews, last meaningful state per user wins
-reviewers = []
-my_last_review_at = ''
-try:
-    r = subprocess.run(['gh', 'api', '--paginate', f'repos/{repo}/pulls/{pr_num}/reviews', '--jq', '[.[] | {state: .state, user: .user.login, submitted_at: .submitted_at}]'], capture_output=True, text=True, timeout=30)
-    if r.returncode == 0 and r.stdout.strip():
-        raw = r.stdout.strip()
-        reviews = []
-        for chunk in raw.split('\n'):
-            chunk = chunk.strip()
-            if chunk:
-                try: reviews.extend(json.loads(chunk))
-                except: pass
-        reviewer_state = {}
-        for rev in reviews:
-            user = rev['user']
-            if user == pr_author:
-                continue
-            state = rev['state']
-            if state in ('APPROVED', 'CHANGES_REQUESTED'):
-                reviewer_state[user] = state
-            elif state == 'COMMENTED':
-                if user not in reviewer_state or reviewer_state[user] in ('COMMENTED', 'CHANGES_REQUESTED'):
-                    reviewer_state[user] = 'COMMENTED'
-            elif state == 'DISMISSED':
-                reviewer_state[user] = 'COMMENTED'
-            if user == github_user and rev.get('submitted_at'):
-                my_last_review_at = rev['submitted_at']
-        for user, state in reviewer_state.items():
-            reviewers.append({'user': user, 'state': state.lower()})
-except: pass
-
-# Add requested reviewers not yet in the list; reset state to pending if re-requested
-existing_users = {rv['user'] for rv in reviewers}
-for user in requested:
-    if user not in existing_users:
-        reviewers.append({'user': user, 'state': 'pending'})
-        existing_users.add(user)
-    else:
-        for rv in reviewers:
-            if rv['user'] == user:
-                rv['state'] = 'pending'
-                break
-
-# Upgrade "pending" reviewers to "commented" if they left issue comments
-try:
-    r = subprocess.run(['gh', 'api', f'repos/{repo}/issues/{pr_num}/comments',
-        '--jq', '[.[].user.login]'], capture_output=True, text=True, timeout=15)
-    if r.returncode == 0 and r.stdout.strip():
-        issue_commenters = set(json.loads(r.stdout))
-        for rv in reviewers:
-            if rv['state'] == 'pending' and rv['user'] in issue_commenters:
-                rv['state'] = 'commented'
-except: pass
-
-# Checks
-checks_status = 'unknown'
-try:
-    r = subprocess.run(['gh', 'pr', 'checks', str(pr_num), '--repo', repo, '--json', 'name,state', '--jq', '{total: length, success: ([.[] | select(.state == \"SUCCESS\")] | length), fail: ([.[] | select(.state == \"FAILURE\")] | length), pending: ([.[] | select(.state == \"PENDING\")] | length)}'], capture_output=True, text=True, timeout=15)
-    if r.returncode == 0 and r.stdout.strip():
-        ck = json.loads(r.stdout)
-        if ck.get('fail', 0) > 0: checks_status = 'failing'
-        elif ck.get('pending', 0) > 0: checks_status = 'pending'
-        elif ck.get('success', 0) > 0: checks_status = 'passing'
-except: pass
+reviewers, my_last_review_at = resolve_reviewers(pr_num, repo, github_user, requested)
+checks_status = get_checks_status(pr_num, repo)
 
 print(json.dumps({'reviewers': reviewers, 'checks': checks_status, 'mergeable_state': mergeable_state, 'draft': is_draft, 'head_sha': head_sha, 'my_last_review_at': my_last_review_at}))
 " 2>/dev/null)
@@ -326,13 +264,14 @@ curl -s -u "$JIRA_EMAIL:$JIRA_TOKEN" \
   --data-urlencode "fields=key,summary,status,assignee,priority,updated,customfield_10023,customfield_10542,parent,comment" \
   --data-urlencode "expand=names" | python3 -c "
 import sys, json, re
+sys.path.insert(0, '$(dirname "$0")')
+from lib.shared import JIRA_BOT_AUTHORS, adf_to_text
 
 data = json.load(sys.stdin)
 names = data.get('names', {})
 parent_link_fields = [fid for fid, label in names.items()
                       if 'parent link' in str(label).lower()]
 
-BOT_AUTHORS = {'App SRE Jira bot', 'Jira Bot', 'Automation for Jira'}
 results = []
 
 for issue in data.get('issues', []):
@@ -350,12 +289,7 @@ for issue in data.get('issues', []):
         if isinstance(mn_field, str):
             marketing_notes = mn_field.strip()[:200]
         elif isinstance(mn_field, dict):
-            for block in mn_field.get('content', []):
-                for item in block.get('content', []):
-                    if item.get('type') == 'text':
-                        marketing_notes += item.get('text', '')
-                marketing_notes += ' '
-            marketing_notes = marketing_notes.strip()[:200]
+            marketing_notes = adf_to_text(mn_field, 200)
 
     # Find parent key
     parent_key = None
@@ -380,17 +314,9 @@ for issue in data.get('issues', []):
     all_comments = comment_data.get('comments', [])
     for c in reversed(all_comments):
         author_name = (c.get('author') or {}).get('displayName', 'Unknown')
-        if author_name in BOT_AUTHORS:
+        if author_name in JIRA_BOT_AUTHORS:
             continue
-        body_text = ''
-        body = c.get('body')
-        if body and isinstance(body, dict):
-            for block in body.get('content', []):
-                for item in block.get('content', []):
-                    if item.get('type') == 'text':
-                        body_text += item.get('text', '')
-                body_text += ' '
-        body_text = body_text.strip()[:200]
+        body_text = adf_to_text(c.get('body'), 200)
         comments.append({
             'author': author_name,
             'created': (c.get('created') or '')[:10],
@@ -428,6 +354,8 @@ curl -s -u "$JIRA_EMAIL:$JIRA_TOKEN" \
   --data-urlencode "fields=key,summary,status,assignee,customfield_10023,parent,customfield_10542" \
   --data-urlencode "expand=names" | python3 -c "
 import sys, json, subprocess, os, re
+sys.path.insert(0, '$(dirname "$0")')
+from lib.shared import JIRA_BOT_AUTHORS, adf_to_text
 
 data = json.load(sys.stdin)
 jira_email = os.environ.get('JIRA_EMAIL', '')
@@ -503,15 +431,7 @@ if parent_keys:
             # Extract target end from parent
             p_target_end = pfields.get('customfield_10023', '')
             # Extract description text (ADF -> plain text, first 500 chars)
-            desc_text = ''
-            desc = pfields.get('description')
-            if desc and isinstance(desc, dict):
-                for block in desc.get('content', []):
-                    for item in block.get('content', []):
-                        if item.get('type') == 'text':
-                            desc_text += item.get('text', '')
-                    desc_text += '\n'
-            desc_text = desc_text.strip()[:500]
+            desc_text = adf_to_text(pfields.get('description'), 500)
 
             # Check changelog for recent Target end changes
             p_changes = []
@@ -554,21 +474,12 @@ for pkey in list(parent_data.keys()):
         })
         with urllib.request.urlopen(req) as resp:
             comment_response = json.loads(resp.read())
-        BOT_AUTHORS = {'App SRE Jira bot', 'Jira Bot', 'Automation for Jira'}
         comments = []
         for c in comment_response.get('comments', []):
             author_name = (c.get('author') or {}).get('displayName', 'Unknown')
-            if author_name in BOT_AUTHORS:
+            if author_name in JIRA_BOT_AUTHORS:
                 continue
-            body_text = ''
-            body = c.get('body')
-            if body and isinstance(body, dict):
-                for block in body.get('content', []):
-                    for item in block.get('content', []):
-                        if item.get('type') == 'text':
-                            body_text += item.get('text', '')
-                    body_text += ' '
-            body_text = body_text.strip()[:200]
+            body_text = adf_to_text(c.get('body'), 200)
             comments.append({
                 'author': author_name,
                 'created': (c.get('created') or '')[:10],
@@ -621,6 +532,8 @@ curl -s -u "$JIRA_EMAIL:$JIRA_TOKEN" \
   --data-urlencode "maxResults=30" \
   --data-urlencode "fields=key" | python3 -c "
 import sys, json, urllib.request, urllib.parse, base64, os
+sys.path.insert(0, '$(dirname "$0")')
+from lib.shared import JIRA_BOT_AUTHORS, adf_to_text
 
 data = json.load(sys.stdin)
 jira_email = os.environ.get('JIRA_EMAIL', '')
@@ -629,8 +542,6 @@ auth = base64.b64encode(f'{jira_email}:{jira_token}'.encode()).decode()
 
 epic_keys = [issue['key'] for issue in data.get('issues', [])]
 results = {}
-
-BOT_AUTHORS = {'App SRE Jira bot', 'Jira Bot', 'Automation for Jira'}
 
 for epic_key in epic_keys:
     # Fetch children (open only) with comments inline — 1 call per epic
@@ -661,17 +572,9 @@ for epic_key in epic_keys:
         all_comments = (cf.get('comment') or {}).get('comments', [])
         for c in reversed(all_comments):
             author_name = (c.get('author') or {}).get('displayName', 'Unknown')
-            if author_name in BOT_AUTHORS:
+            if author_name in JIRA_BOT_AUTHORS:
                 continue
-            body_text = ''
-            body = c.get('body')
-            if body and isinstance(body, dict):
-                for block in body.get('content', []):
-                    for item in block.get('content', []):
-                        if item.get('type') == 'text':
-                            body_text += item.get('text', '')
-                    body_text += ' '
-            body_text = body_text.strip()[:150]
+            body_text = adf_to_text(c.get('body'), 150)
             latest_comment = {
                 'author': author_name,
                 'created': (c.get('created') or '')[:10],
@@ -712,6 +615,8 @@ curl -s -u "$JIRA_EMAIL:$JIRA_TOKEN" \
   --data-urlencode "maxResults=30" \
   --data-urlencode "fields=key,summary,status" 2>/dev/null | python3 -c "
 import sys, json, subprocess, os
+sys.path.insert(0, '$(dirname "$0")')
+from lib.shared import resolve_reviewers, get_checks_status, GITHUB_BOT_USERS
 
 REPO = '${REPO}'
 github_user = os.environ['GITHUB_USER']
@@ -770,74 +675,27 @@ for key in child_keys:
             continue
         pr_num = pr_info['number']
 
-        # Get PR author + requested reviewers + mergeable state
-        pr_author = ''
+        # Get PR details + mergeable state
         mergeable_state = 'unknown'
         requested = []
         try:
             req_result = subprocess.run(
                 ['gh', 'api', f'repos/{REPO}/pulls/{pr_num}',
-                 '--jq', '{author: .user.login, requested: [.requested_reviewers[].login], mergeable_state: .mergeable_state}'],
+                 '--jq', '{requested: [.requested_reviewers[].login], mergeable_state: .mergeable_state}'],
                 capture_output=True, text=True, timeout=15
             )
             if req_result.returncode == 0 and req_result.stdout.strip():
                 pr_extra = json.loads(req_result.stdout)
-                pr_author = pr_extra.get('author', '')
                 requested = pr_extra.get('requested', [])
                 mergeable_state = pr_extra.get('mergeable_state', 'unknown')
         except: pass
 
-        # Get reviews — paginate to get ALL, last meaningful state per user wins
-        reviews_result = subprocess.run(
-            ['gh', 'api', '--paginate', f'repos/{REPO}/pulls/{pr_num}/reviews',
-             '--jq', '[.[] | {state: .state, user: .user.login}]'],
-            capture_output=True, text=True, timeout=30
-        )
-        approvals = 0
-        changes_requested = 0
-        reviewers = []
-        if reviews_result.returncode == 0 and reviews_result.stdout.strip():
-            raw = reviews_result.stdout.strip()
-            reviews = []
-            for chunk in raw.split('\n'):
-                chunk = chunk.strip()
-                if chunk:
-                    try: reviews.extend(json.loads(chunk))
-                    except: pass
-            reviewer_state = {}
-            for r in reviews:
-                user = r['user']
-                if user == pr_author:
-                    continue
-                state = r['state']
-                if state in ('APPROVED', 'CHANGES_REQUESTED'):
-                    reviewer_state[user] = state
-                elif state == 'COMMENTED':
-                    if user not in reviewer_state or reviewer_state[user] in ('COMMENTED', 'CHANGES_REQUESTED'):
-                        reviewer_state[user] = 'COMMENTED'
-                elif state == 'DISMISSED':
-                    reviewer_state[user] = 'COMMENTED'
-            for user, state in reviewer_state.items():
-                if state == 'APPROVED':
-                    approvals += 1
-                elif state == 'CHANGES_REQUESTED':
-                    changes_requested += 1
-                reviewers.append({'user': user, 'state': state.lower()})
-        # Add requested reviewers not yet in the list; reset state to pending if re-requested
-        existing = {rv['user'] for rv in reviewers}
-        for u in requested:
-            if u not in existing:
-                reviewers.append({'user': u, 'state': 'pending'})
-                existing.add(u)
-            else:
-                for rv in reviewers:
-                    if rv['user'] == u:
-                        rv['state'] = 'pending'
-                        break
+        reviewers, _ = resolve_reviewers(pr_num, REPO, github_user, requested)
+        approvals = sum(1 for r in reviewers if r['state'] == 'approved')
+        changes_requested = sum(1 for r in reviewers if r['state'] == 'changes_requested')
 
         # Get last 8 unresolved non-bot comments (issue + review via GraphQL)
         comments = []
-        BOT_USERS = {'codecov[bot]', 'coderabbitai[bot]', 'github-actions[bot]', 'dependabot[bot]'}
 
         # Issue comments
         comments_result = subprocess.run(
@@ -870,41 +728,11 @@ for key in child_keys:
                     })
 
         # Filter bots, sort by date, take last 8
-        comments = [c for c in comments if c.get('user') not in BOT_USERS]
+        comments = [c for c in comments if c.get('user') not in GITHUB_BOT_USERS]
         comments.sort(key=lambda c: c.get('created_at', ''), reverse=True)
         comments = comments[:8]
 
-        # Upgrade "pending" reviewers to "commented" if they left issue comments
-        commenters = {c['user'] for c in comments if c.get('user')}
-        for rv in reviewers:
-            if rv['state'] == 'pending' and rv['user'] in commenters:
-                rv['state'] = 'commented'
-
-        # Get CI check status
-        checks_status = 'unknown'
-        try:
-            checks_result = subprocess.run(
-                ['gh', 'api', f'repos/{REPO}/commits/{pr_num}/check-runs',
-                 '--jq', '{total: .total_count, success: ([.check_runs[] | select(.conclusion == \"success\")] | length), fail: ([.check_runs[] | select(.conclusion == \"failure\")] | length), pending: ([.check_runs[] | select(.status == \"in_progress\" or .status == \"queued\")] | length)}'],
-                capture_output=True, text=True, timeout=15
-            )
-            if checks_result.returncode != 0 or not checks_result.stdout.strip():
-                # Try using PR head SHA via combined status
-                checks_result = subprocess.run(
-                    ['gh', 'pr', 'checks', str(pr_num), '--repo', REPO, '--json', 'name,state',
-                     '--jq', '{total: length, success: ([.[] | select(.state == \"SUCCESS\")] | length), fail: ([.[] | select(.state == \"FAILURE\")] | length), pending: ([.[] | select(.state == \"PENDING\")] | length)}'],
-                    capture_output=True, text=True, timeout=15
-                )
-            if checks_result.returncode == 0 and checks_result.stdout.strip():
-                ck = json.loads(checks_result.stdout)
-                if ck.get('fail', 0) > 0:
-                    checks_status = 'failing'
-                elif ck.get('pending', 0) > 0:
-                    checks_status = 'pending'
-                elif ck.get('success', 0) > 0:
-                    checks_status = 'passing'
-        except:
-            pass
+        checks_status = get_checks_status(pr_num, REPO)
 
         results[key] = {
             'pr_number': pr_num,
@@ -938,6 +766,8 @@ curl -s -u "$JIRA_EMAIL:$JIRA_TOKEN" \
   --data-urlencode "fields=key,parent" \
   --data-urlencode "expand=names" | python3 -c "
 import sys, json, urllib.request, urllib.parse, base64, os, re
+sys.path.insert(0, '$(dirname "$0")')
+from lib.shared import JIRA_BOT_AUTHORS, adf_to_text
 
 data = json.load(sys.stdin)
 jira_email = os.environ.get('JIRA_EMAIL', '')
@@ -993,7 +823,6 @@ for pkey in parent_keys:
             resp_data = json.loads(resp.read())
 
         children = []
-        BOT_AUTHORS = {'App SRE Jira bot', 'Jira Bot', 'Automation for Jira'}
         for issue in resp_data.get('issues', []):
             ikey = issue['key']
             ifields = issue['fields']
@@ -1002,17 +831,9 @@ for pkey in parent_keys:
             comments_data = ifields.get('comment', {}).get('comments', [])
             for c in reversed(comments_data):
                 author_name = (c.get('author') or {}).get('displayName', 'Unknown')
-                if author_name in BOT_AUTHORS:
+                if author_name in JIRA_BOT_AUTHORS:
                     continue
-                body_text = ''
-                body = c.get('body')
-                if body and isinstance(body, dict):
-                    for block in body.get('content', []):
-                        for item in block.get('content', []):
-                            if item.get('type') == 'text':
-                                body_text += item.get('text', '')
-                        body_text += ' '
-                body_text = body_text.strip()[:150]
+                body_text = adf_to_text(c.get('body'), 150)
                 latest_comment = {'author': author_name, 'created': (c.get('created') or '')[:10], 'body': body_text}
                 break
 
@@ -1040,60 +861,6 @@ print(json.dumps(results, indent=2))
 "
 echo ""
 fi # end SIBLINGS jira guard
-
-# --- Section 5: Jira tickets I'm involved in (recent changes) ---
-echo "### SECTION: JIRA_TICKET_ACTIVITY"
-if ! $JIRA_OK; then jira_skip; else
-curl -s -u "$JIRA_EMAIL:$JIRA_TOKEN" \
-  "https://${JIRA_INSTANCE}/rest/api/3/search/jql" \
-  -G \
-  --data-urlencode "jql=project = ${JIRA_PROJECT} AND (assignee = currentUser() OR watcher = currentUser() OR reporter = currentUser()) AND issuetype != Epic AND updated >= -${LOOKBACK_DAYS}d ORDER BY updated DESC" \
-  --data-urlencode "maxResults=20" \
-  --data-urlencode "fields=key,summary,status,assignee,updated,issuetype" \
-  --data-urlencode "expand=changelog" | python3 -c "
-import sys, json
-
-data = json.load(sys.stdin)
-since = '${SINCE_DATE}T00:00:00.000+0000'
-results = []
-
-for issue in data.get('issues', []):
-    key = issue['key']
-    fields = issue['fields']
-    summary = fields.get('summary', '')[:80]
-    status = fields.get('status', {}).get('name', '')
-    issue_type = fields.get('issuetype', {}).get('name', '')
-
-    changes = []
-    for history in (issue.get('changelog', {}).get('histories', []) or []):
-        created = history.get('created', '')
-        if created < since:
-            continue
-        author = history.get('author', {}).get('displayName', 'Unknown')
-        for item in history.get('items', []):
-            field = item.get('field', '')
-            if field in ('status', 'priority', 'assignee', 'Sprint', 'Flagged', 'resolution'):
-                changes.append({
-                    'field': field,
-                    'from': item.get('fromString', ''),
-                    'to': item.get('toString', ''),
-                    'who': author,
-                    'when': created[:10]
-                })
-
-    if changes:
-        results.append({
-            'key': key,
-            'summary': summary,
-            'status': status,
-            'type': issue_type,
-            'changes': changes
-        })
-
-print(json.dumps(results, indent=2))
-"
-echo ""
-fi # end JIRA_TICKET_ACTIVITY jira guard
 
 # --- Section 5b: Jira tickets where I'm QA Contact ---
 echo "### SECTION: QA_CONTACT"

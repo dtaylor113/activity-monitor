@@ -138,9 +138,6 @@ def assemble(raw, output_dir):
     approved_reviews = json.loads(extract_section(raw, 'APPROVED_REVIEWS') or '[]')
     my_open_prs = json.loads(extract_section(raw, 'MY_OPEN_PRS') or '[]')
     pr_status = parse_json_safe(extract_section(raw, 'PR_STATUS'), {})
-    jta_raw = extract_section(raw, 'JIRA_TICKET_ACTIVITY')
-    jira_activity = json.loads(jta_raw) if jta_raw else []
-
     action_items_raw = extract_section(raw, 'ACTION_ITEMS')
     action_items = json.loads(action_items_raw) if action_items_raw else []
 
@@ -256,7 +253,6 @@ def assemble(raw, output_dir):
             'github_user': github_user
         },
         'epics': epics,
-        'parent_alignment': parent_alignment,
         'parent_comments': parent_comments,
         'parent_comments_ai': {},
         'epic_children': epic_children,
@@ -265,7 +261,6 @@ def assemble(raw, output_dir):
         'siblings_ai': {},
         'prs': prs_list,
         'pr_status': pr_status,
-        'jira_activity': jira_activity,
         'action_items': action_items,
         'jira_action_items': jira_action_items,
         'qa_contact': qa_contact,
