@@ -122,6 +122,7 @@ def resolve_reviewers(pr_num, repo, github_user, requested=None):
         pass
 
     # Add requested reviewers; reset to pending if re-requested
+    re_requested = set()
     existing_users = {rv['user'] for rv in reviewers}
     for user in requested:
         if user not in existing_users:
@@ -132,8 +133,10 @@ def resolve_reviewers(pr_num, repo, github_user, requested=None):
                 if rv['user'] == user:
                     rv['state'] = 'pending'
                     break
+        re_requested.add(user)
 
     # Upgrade pending → commented if they left issue comments
+    # (skip re-requested reviewers — re-request is a stronger signal)
     try:
         r = subprocess.run(
             ['gh', 'api', f'repos/{repo}/issues/{pr_num}/comments',
@@ -142,7 +145,7 @@ def resolve_reviewers(pr_num, repo, github_user, requested=None):
         if r.returncode == 0 and r.stdout.strip():
             issue_commenters = set(json.loads(r.stdout))
             for rv in reviewers:
-                if rv['state'] == 'pending' and rv['user'] in issue_commenters:
+                if rv['state'] == 'pending' and rv['user'] in issue_commenters and rv['user'] not in re_requested:
                     rv['state'] = 'commented'
     except Exception:
         pass
