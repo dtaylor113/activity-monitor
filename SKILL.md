@@ -696,7 +696,6 @@ Columns: PR | Title | Author | Reviewers | Checks | Created
 - Author = GitHub username who opened the PR
 - Reviewers = individual reviewers with colored status (approved/changes_requested/commented/pending).
   Includes inline "awaiting author" badge when user requested changes and author hasn't pushed.
-  Includes 🛡️QA badge when reviewer is the QA Contact for the associated Jira ticket.
 - Checks = CI status (passing/failing/pending) + merge status (mergeable/blocked/conflicts/unstable)
 - Created = date PR was opened (oldest PRs surface first for attention)
 - Comment sub-rows beneath each PR (initially collapsed; "Expand Comments" button expands all in section)

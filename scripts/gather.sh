@@ -862,36 +862,6 @@ print(json.dumps(results, indent=2))
 echo ""
 fi # end SIBLINGS jira guard
 
-# --- Section 5b: Jira tickets where I'm QA Contact ---
-echo "### SECTION: QA_CONTACT"
-if ! $JIRA_OK; then jira_skip; else
-curl -s -u "$JIRA_EMAIL:$JIRA_TOKEN" \
-  -X POST "https://${JIRA_INSTANCE}/rest/api/3/search/jql" \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"jql\": \"\\\"QA Contact\\\" = currentUser() AND status not in (Done, Closed) ORDER BY updated DESC\",
-    \"fields\": [\"key\",\"summary\",\"status\",\"assignee\",\"issuetype\",\"priority\",\"updated\"],
-    \"maxResults\": 30
-  }" | python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-results = []
-for issue in data.get('issues', []):
-    f = issue.get('fields', {})
-    results.append({
-        'key': issue['key'],
-        'summary': f.get('summary', '')[:100],
-        'status': f.get('status', {}).get('name', ''),
-        'assignee': (f.get('assignee') or {}).get('displayName', 'Unassigned'),
-        'type': f.get('issuetype', {}).get('name', ''),
-        'priority': f.get('priority', {}).get('name', ''),
-        'updated': (f.get('updated') or '')[:10]
-    })
-print(json.dumps(results, indent=2))
-"
-echo ""
-fi # end QA_CONTACT jira guard
-
 # --- Section 6: Jira tickets where I was @mentioned (last 1 month, unanswered) ---
 echo "### SECTION: JIRA_MENTIONS"
 if ! $JIRA_OK; then jira_skip; else

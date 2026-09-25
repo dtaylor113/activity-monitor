@@ -147,9 +147,6 @@ def assemble(raw, output_dir):
     jira_mentions_raw = extract_section(raw, 'JIRA_MENTIONS')
     jira_mentions = json.loads(jira_mentions_raw) if jira_mentions_raw else []
 
-    qa_contact_raw = extract_section(raw, 'QA_CONTACT')
-    qa_contact = json.loads(qa_contact_raw) if qa_contact_raw else []
-
     pc_raw = extract_section(raw, 'PR_COMMENTS')
     pr_comments_flat = []
     if pc_raw:
@@ -263,7 +260,6 @@ def assemble(raw, output_dir):
         'pr_status': pr_status,
         'action_items': action_items,
         'jira_action_items': jira_action_items,
-        'qa_contact': qa_contact,
         'jira_mentions': jira_mentions,
         'dismissed_jira_mentions': [],
         'retro_items': []

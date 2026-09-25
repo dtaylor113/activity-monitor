@@ -382,7 +382,6 @@ function renderPRs() {
 
 function renderPRTable(prs, tableId) {
   const myUser = D.meta.github_user;
-  const qaTicketKeys = new Set((D.qa_contact || []).map(q => q.key));
   let html = `<table id="${tableId}"><thead><tr>`;
   ['PR','Title','Author','Reviewers','My State','Checks','Created'].forEach(h => {
     html += `<th>${h}<span class="sort-indicator">⇅</span><div class="resize-handle"></div></th>`;
@@ -390,9 +389,7 @@ function renderPRTable(prs, tableId) {
   html += `</tr></thead><tbody>`;
   prs.forEach(pr => {
     const st = (D.pr_status && D.pr_status[pr.number]) || {};
-    const ticketMatch = (pr.title || '').match(/OCMUI-\d+/);
-    const isQAContact = ticketMatch && qaTicketKeys.has(ticketMatch[0]);
-    const reviewHtml = renderReviewers(st.reviewers, isQAContact, pr.status_badge);
+    const reviewHtml = renderReviewers(st.reviewers, pr.status_badge);
     const checksHtml = renderChecksBadge(st.checks || 'unknown');
     const mergeHtml = renderMergeStatus(st.mergeable_state || '');
     const statusHtml = mergeHtml ? checksHtml + '<br>' + mergeHtml : checksHtml;
@@ -446,7 +443,7 @@ function renderPRTable(prs, tableId) {
   return html;
 }
 
-function renderReviewers(reviewers, isQAContact, statusBadge) {
+function renderReviewers(reviewers, statusBadge) {
   if (!reviewers || !reviewers.length) return `<span style="color:#6b7280;">—</span>`;
   const myUser = D.meta.github_user;
   const stateMap = {
@@ -459,9 +456,6 @@ function renderReviewers(reviewers, isQAContact, statusBadge) {
     const s = stateMap[r.state] || stateMap.pending;
     const displayName = r.via_team ? r.via_team.replace(/-/g, ' ') : r.user;
     let parts = `<span style="color:${s.color};white-space:nowrap;" title="${r.via_team ? 'via team: ' + r.via_team : r.state}">${s.icon} ${esc(displayName)}</span>`;
-    if (isQAContact && r.user === myUser) {
-      parts += ' <span style="color:#60a5fa;font-size:0.85em;white-space:nowrap;" title="QA Contact">🛡️QA</span>';
-    }
     if (r.user === myUser && r.state === 'changes_requested' && statusBadge === 'Awaiting author') {
       parts += ' <span style="color:#f59e0b;font-size:0.85em;font-style:italic;white-space:nowrap;">awaiting author</span>';
     }
@@ -529,32 +523,6 @@ function formatActionText(text) {
   if (!subs.length) return main;
   const listItems = subs.map(s => `<li>${esc(s.slice(2))}</li>`).join('');
   return `${main}<ul style="margin:4px 0 0 16px; padding:0; list-style:disc;">${listItems}</ul>`;
-}
-
-function renderQAContact() {
-  const items = D.qa_contact || [];
-  let html = `<h3>JIRAs I'm QA Contact</h3>`;
-  if (!items.length) return html + `<p class="meta">It's all good.</p>`;
-  html += `<table id="qa-contact-table" class="pr-table"><thead><tr>`;
-  ['#','Ticket','Summary','Type','Status','Assignee','Priority','Updated'].forEach(h => {
-    html += `<th>${h}<span class="sort-indicator">⇅</span><div class="resize-handle"></div></th>`;
-  });
-  html += `</tr></thead><tbody>`;
-  items.forEach((item, idx) => {
-    const url = `https://redhat.atlassian.net/browse/${item.key}`;
-    html += `<tr>
-      <td class="nowrap">${idx + 1}</td>
-      <td class="nowrap"><a href="${url}" target="_blank">${item.key}</a></td>
-      <td>${esc(item.summary)}</td>
-      <td>${esc(item.type || '')}</td>
-      <td>${esc(item.status)}</td>
-      <td>${esc(item.assignee)}</td>
-      <td>${esc(item.priority || '')}</td>
-      <td class="nowrap">${item.updated || ''}</td>
-    </tr>`;
-  });
-  html += '</tbody></table>';
-  return html;
 }
 
 function renderJiraMentions() {
@@ -706,7 +674,6 @@ function renderPage() {
 
   html += `<div class="tab-panel" id="tab-jira">`;
   html += renderEpicsTable();
-  html += renderQAContact();
   html += renderJiraMentions();
   html += `</div>`;
 
