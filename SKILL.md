@@ -306,7 +306,7 @@ PR comments now come from three sources in `gather.sh`:
 3. **Review body text** — formal review submissions with non-empty body (`GET /pulls/{pr}/reviews`)
 
 Comments are merged, deduped, sorted by date, and limited to the last 15 per PR.
-`assemble.py` truncates bodies to 500 chars and keeps 12 comments per PR.
+`assemble.py` truncates bodies to 1500 chars and keeps 12 comments per PR.
 
 AI summaries are still generated for epics, children, action items, and Jira
 mentions — only PR-level summaries have been replaced with status badges.

@@ -134,6 +134,44 @@ function jiraLink(key) { return `<a href="${JIRA}${key}">${key}</a>`; }
 function ghLink(n) { return `<a href="${GH}${n}">#${n}</a>`; }
 function esc(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
+// Renders a raw GitHub comment body: groups '>' quoted lines into a distinct
+// blockquote block, separates paragraphs on blank lines, keeps everything escaped.
+function formatCommentBody(text) {
+  if (!text) return '';
+  const lines = (text || '').replace(/\r\n/g, '\n').split('\n');
+  let html = '';
+  let quoteBuf = [];
+  let paraBuf = [];
+  const flushQuote = () => {
+    if (quoteBuf.length) {
+      html += `<div style="border-left:2px solid #4b5563;padding:2px 0 2px 8px;margin:3px 0;color:#6b7280;font-style:italic;">${quoteBuf.map(esc).join('<br>')}</div>`;
+      quoteBuf = [];
+    }
+  };
+  const flushPara = () => {
+    if (paraBuf.length) {
+      html += `<div style="margin:3px 0;">${paraBuf.map(esc).join(' ')}</div>`;
+      paraBuf = [];
+    }
+  };
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (line.startsWith('>')) {
+      flushPara();
+      quoteBuf.push(line.replace(/^>\s?/, ''));
+    } else if (line === '') {
+      flushQuote();
+      flushPara();
+    } else {
+      flushQuote();
+      paraBuf.push(line);
+    }
+  }
+  flushQuote();
+  flushPara();
+  return html || esc(text);
+}
+
 function dateClass(targetEnd, parentTargetEnd) {
   if (!targetEnd) return '';
   const today = new Date(); today.setHours(0,0,0,0);
@@ -418,7 +456,7 @@ function renderPRTable(prs, tableId) {
       const pageSize = 10;
       const detailId = `comments-${tableId}-${pr.number}`;
       html += `<details><summary>Show ${comments.length} comments</summary>`;
-      html += `<table id="${detailId}" style="width:100%;border-collapse:collapse;font-size:11px;margin:4px 0 0;"><tbody>`;
+      html += `<table id="${detailId}" style="width:100%;table-layout:fixed;border-collapse:collapse;font-size:11px;margin:4px 0 0;"><tbody>`;
       let lastDate = '';
       comments.forEach((c, i) => {
         const dateOnly = (c.when || '').slice(0, 10);
@@ -426,9 +464,9 @@ function renderPRTable(prs, tableId) {
         lastDate = dateOnly;
         const hidden = i >= pageSize;
         html += `<tr data-comment-user="${esc(c.who)}" style="vertical-align:top;${hidden ? 'display:none;' : ''}"${hidden ? ' data-page-hidden="1"' : ''}>`;
-        html += `<td style="color:#6b7280;white-space:nowrap;padding:${showDate ? '6px' : '2px'} 8px 2px 0;border:none;">${showDate ? esc(dateOnly) : ''}</td>`;
-        html += `<td style="color:#60a5fa;font-weight:600;white-space:nowrap;padding:${showDate ? '6px' : '2px'} 8px 2px 0;border:none;">${esc(c.who)}</td>`;
-        html += `<td style="color:#9ca3af;padding:${showDate ? '6px' : '2px'} 0 2px 0;border:none;">${esc(c.body)}</td>`;
+        html += `<td style="width:70px;color:#6b7280;white-space:nowrap;padding:${showDate ? '6px' : '2px'} 8px 2px 0;border:none;">${showDate ? esc(dateOnly) : ''}</td>`;
+        html += `<td style="width:110px;color:#60a5fa;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:${showDate ? '6px' : '2px'} 8px 2px 0;border:none;">${esc(c.who)}</td>`;
+        html += `<td style="color:#9ca3af;white-space:normal;word-wrap:break-word;overflow-wrap:break-word;padding:${showDate ? '6px' : '2px'} 0 2px 0;border:none;">${formatCommentBody(c.body)}</td>`;
         html += `</tr>`;
       });
       html += `</tbody></table>`;

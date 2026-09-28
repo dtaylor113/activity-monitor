@@ -216,7 +216,7 @@ def assemble(raw, output_dir):
             pr_comments_by_num.setdefault(num, []).append({
                 'who': c.get('user', ''),
                 'when': c.get('updated_at', ''),
-                'body': c.get('body', '')[:500]
+                'body': c.get('body', '')[:1500]
             })
     for num, comments in pr_comments_by_num.items():
         if num in pr_map:

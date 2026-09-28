@@ -128,7 +128,7 @@ all_comments = []
 
 # Issue comments (general PR conversation — these are never 'resolved')
 r = subprocess.run(['gh', 'api', f'repos/{repo}/issues/{pr_num}/comments',
-    '--jq', '[.[] | {user: .user.login, body: .body[:1000], updated_at: .created_at}]'],
+    '--jq', '[.[] | {user: .user.login, body: .body[:1500], updated_at: .created_at}]'],
     capture_output=True, text=True, timeout=15)
 if r.returncode == 0 and r.stdout.strip():
     all_comments.extend(json.loads(r.stdout))
@@ -159,13 +159,13 @@ if r.returncode == 0 and r.stdout.strip():
             author = c.get('author',{}).get('login','')
             all_comments.append({
                 'user': author,
-                'body': c.get('body','')[:500],
+                'body': c.get('body','')[:1500],
                 'updated_at': c.get('createdAt','')
             })
 
 # Review body text (formal review submissions with non-empty body)
 r = subprocess.run(['gh', 'api', f'repos/{repo}/pulls/{pr_num}/reviews',
-    '--jq', '[.[] | select(.body != null and .body != \"\") | {user: .user.login, body: .body[:1000], updated_at: .submitted_at, state: .state}]'],
+    '--jq', '[.[] | select(.body != null and .body != \"\") | {user: .user.login, body: .body[:1500], updated_at: .submitted_at, state: .state}]'],
     capture_output=True, text=True, timeout=15)
 if r.returncode == 0 and r.stdout.strip():
     reviews = json.loads(r.stdout)
@@ -700,7 +700,7 @@ for key in child_keys:
         # Issue comments
         comments_result = subprocess.run(
             ['gh', 'api', f'repos/{REPO}/issues/{pr_num}/comments',
-             '--jq', '[.[] | {user: .user.login, body: .body[:150], created_at: .created_at}]'],
+             '--jq', '[.[] | {user: .user.login, body: .body[:1500], created_at: .created_at}]'],
             capture_output=True, text=True, timeout=15
         )
         if comments_result.returncode == 0 and comments_result.stdout.strip():
