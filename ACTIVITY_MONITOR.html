@@ -15,7 +15,6 @@ body {
   width: 98vw;
 }
 h1 { font-size: 1.6em; margin-bottom: 4px; color: #fff; }
-h2 { font-size: 1.3em; margin: 28px 0 8px 0; color: #93c5fd; border-bottom: 1px solid #333; padding-bottom: 4px; }
 h3 { font-size: 1.1em; margin: 18px 0 6px 0; color: #a5b4fc; }
 .meta { color: #9ca3af; font-size: 0.85em; margin-bottom: 16px; }
 a { color: #60a5fa; text-decoration: none; }
@@ -42,8 +41,6 @@ th .resize-handle:hover, th .resize-handle.active { background: #60a5fa; }
 ul { margin: 4px 0 4px 20px; }
 li { margin: 3px 0; }
 p { margin: 6px 0; }
-.section-content { padding-left: 12px; }
-
 /* Expand toggle chevron */
 .expand-toggle {
   display: inline-block; cursor: pointer; font-size: 22px;
@@ -67,14 +64,12 @@ tr.epic-detail td { background: #0d0d1a; padding: 10px 14px 10px 48px; border-to
 .detail-panel li { margin: 2px 0; color: #d1d5db; }
 .detail-change { color: #d1d5db; }
 .detail-change strong { color: #e5e7eb; }
-.mismatch-flag { color: #ef4444; font-weight: 600; }
 .child-comment { margin-left: 12px; color: #9ca3af; font-size: 11px; font-style: italic; }
 .child-group-label { margin: 8px 0 2px 0; font-size: 11px; font-weight: 600; color: #6366f1; text-transform: uppercase; letter-spacing: 0.5px; }
 .child-pr-info { margin: 4px 0 6px 12px; padding: 4px 8px; border-left: 2px solid #4b5563; font-size: 11px; }
 .child-pr-info .pr-badge { font-weight: 600; }
 .child-pr-info .pr-comment-list { margin-top: 3px; }
 .child-pr-info .pr-reviewer-list { margin: 3px 0 3px 4px; font-size: 11px; }
-.reviewer-line { display: inline-flex; flex-wrap: wrap; gap: 2px 6px; }
 .ai-text { color: #a5b4fc; font-style: italic; font-size: 11px; margin-left: 26px; }
 .ai-text::before { content: '✦ '; opacity: 0.6; }
 .ai-diamond { color: #a5b4fc; font-style: italic; font-size: 11px; }
@@ -87,15 +82,6 @@ tr.epic-detail td { background: #0d0d1a; padding: 10px 14px 10px 48px; border-to
 .section-toggle.open { transform: rotate(90deg); color: #60a5fa; }
 .detail-label { cursor: pointer; user-select: none; }
 .detail-label:hover { color: #93c5fd; }
-
-/* PR comment sub-rows */
-tr.pr-comments td { background: #0d0d1a; border-top: none; padding: 3px 10px 6px 10px; font-size: 11px; color: #9ca3af; line-height: 1.4; }
-.pr-comments-toggle { background: rgba(165, 180, 252, 0.12); border: 1px solid rgba(165, 180, 252, 0.3); color: #a5b4fc; font-size: 11px; padding: 3px 10px; border-radius: 3px; cursor: pointer; margin-left: 10px; vertical-align: middle; }
-.pr-comments-toggle:hover { background: rgba(165, 180, 252, 0.2); }
-.draft-toggle { background: rgba(165, 180, 252, 0.12); border: 1px solid rgba(165, 180, 252, 0.3); color: #a5b4fc; font-size: 11px; padding: 3px 10px; border-radius: 3px; cursor: pointer; margin-left: 6px; vertical-align: middle; }
-.draft-toggle:hover { background: rgba(165, 180, 252, 0.2); }
-.pr-comment-line { padding: 2px 0; }
-.comment-label { color: #60a5fa; font-weight: 600; margin-right: 4px; }
 
 /* Tabs */
 .tab-bar { display: flex; gap: 0; border-bottom: 2px solid #333; margin: 16px 0 0 0; }
@@ -134,42 +120,25 @@ function jiraLink(key) { return `<a href="${JIRA}${key}">${key}</a>`; }
 function ghLink(n) { return `<a href="${GH}${n}">#${n}</a>`; }
 function esc(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
-// Renders a raw GitHub comment body: groups '>' quoted lines into a distinct
-// blockquote block, separates paragraphs on blank lines, keeps everything escaped.
-function formatCommentBody(text) {
-  if (!text) return '';
-  const lines = (text || '').replace(/\r\n/g, '\n').split('\n');
-  let html = '';
-  let quoteBuf = [];
-  let paraBuf = [];
-  const flushQuote = () => {
-    if (quoteBuf.length) {
-      html += `<div style="border-left:2px solid #4b5563;padding:2px 0 2px 8px;margin:3px 0;color:#6b7280;font-style:italic;">${quoteBuf.map(esc).join('<br>')}</div>`;
-      quoteBuf = [];
-    }
-  };
-  const flushPara = () => {
-    if (paraBuf.length) {
-      html += `<div style="margin:3px 0;">${paraBuf.map(esc).join(' ')}</div>`;
-      paraBuf = [];
-    }
-  };
-  for (const rawLine of lines) {
-    const line = rawLine.trim();
-    if (line.startsWith('>')) {
-      flushPara();
-      quoteBuf.push(line.replace(/^>\s?/, ''));
-    } else if (line === '') {
-      flushQuote();
-      flushPara();
-    } else {
-      flushQuote();
-      paraBuf.push(line);
-    }
-  }
-  flushQuote();
-  flushPara();
-  return html || esc(text);
+// "Mark done" localStorage keys — computed identically wherever an item is
+// rendered (to attach the checkbox) and wherever it's pruned (to detect
+// stale entries once the source item disappears). Centralized so the two
+// call sites can't silently drift apart.
+const actionItemKey = (item) => item.doc_id + '|' + (item.text || '').slice(0, 80);
+const retroItemKey = (item) => 'retro|' + (item.text || '').slice(0, 80);
+const jiraActionItemKey = (item) => 'jira-ai|' + item.key + '|' + (item.text || '').slice(0, 80);
+
+// Relative-age label shared by Retro Items and every Action Items table.
+function formatAge(dateStr) {
+  if (!dateStr) return '';
+  const days = Math.floor((new Date() - new Date(dateStr)) / 86400000);
+  if (days === 0) return 'today';
+  if (days === 1) return '1 day ago';
+  if (days < 7) return `${days} days ago`;
+  const weeks = Math.floor(days / 7);
+  if (weeks < 5) return `~${weeks} week${weeks > 1 ? 's' : ''} ago`;
+  const months = Math.floor(days / 30);
+  return `~${months} month${months > 1 ? 's' : ''} ago`;
 }
 
 function dateClass(targetEnd, parentTargetEnd) {
@@ -267,7 +236,7 @@ function renderEpicsTable() {
               } else if (prData.approvals === 0 && prData.changes_requested === 0) {
                 html += `<span style="color:#6b7280;">no reviews yet</span> `;
               }
-              if (prData.ai_summary || prData.what) html += `<div class="ai-text">${esc(prData.ai_summary || prData.what)}</div>`;
+              if (prData.ai_summary) html += `<div class="ai-text">${esc(prData.ai_summary)}</div>`;
               if (prData.comments && prData.comments.length) {
                 html += `<div class="pr-comment-list">`;
                 prData.comments.forEach(c => {
@@ -336,168 +305,18 @@ function renderEpicsTable() {
   return html;
 }
 
-function renderPRs() {
-  const myUser = D.meta.github_user;
-  const myPRs = D.prs.filter(pr => pr.author === myUser);
-
-  const reviewPRs = [];
-  const approvedPRs = [];
-
-  D.prs.forEach(pr => {
-    if (pr.author === myUser) return;
-    const st = D.pr_status && D.pr_status[pr.number];
-    if (!st || !st.reviewers) return;
-    const myReview = st.reviewers.find(r => r.user === myUser);
-    if (!myReview) return;
-
-    if (myReview.state === 'approved') {
-      approvedPRs.push(pr);
-      return;
-    }
-
-    reviewPRs.push(pr);
-  });
-
-  reviewPRs.sort((a, b) => {
-    const stA = (D.pr_status && D.pr_status[a.number]) || {};
-    const stB = (D.pr_status && D.pr_status[b.number]) || {};
-    const myRevA = (stA.reviewers || []).find(r => r.user === myUser);
-    const myRevB = (stB.reviewers || []).find(r => r.user === myUser);
-    // pending/commented first, changes_requested second
-    const stateOrder = s => s === 'changes_requested' ? 1 : 0;
-    const orderA = stateOrder(myRevA ? myRevA.state : '');
-    const orderB = stateOrder(myRevB ? myRevB.state : '');
-    if (orderA !== orderB) return orderA - orderB;
-    // Within same group, oldest created first
-    return (a.created || a.updated || '').localeCompare(b.created || b.updated || '');
-  });
-  approvedPRs.sort((a, b) => (a.created || a.updated || '').localeCompare(b.created || b.updated || ''));
-
-  let html = '';
-
-  if (myPRs.length) {
-    const nonDraftPRs = myPRs.filter(pr => {
-      const st = D.pr_status && D.pr_status[pr.number];
-      return !st || !st.draft;
-    });
-    const draftPRs = myPRs.filter(pr => {
-      const st = D.pr_status && D.pr_status[pr.number];
-      return st && st.draft;
-    });
-    html += `<h3>My PRs <button class="pr-comments-toggle" data-table="my-prs-table">Expand Comments</button>`;
-    if (draftPRs.length) {
-      html += ` <button class="draft-toggle" data-draft-table="my-draft-prs-table">Show Draft PRs (${draftPRs.length})</button>`;
-    }
-    html += ` <label style="font-weight:normal;font-size:12px;cursor:pointer;margin-left:6px;"><input type="checkbox" class="my-comments-filter" data-table="my-prs-table" style="vertical-align:middle;margin-right:3px;">Only my comments</label></h3>`;
-    html += renderPRTable(nonDraftPRs, 'my-prs-table');
-    if (draftPRs.length) {
-      html += `<div id="my-draft-prs-table-wrap" style="display:none;">`;
-      html += renderPRTable(draftPRs, 'my-draft-prs-table');
-      html += `</div>`;
-    }
-  }
-
-  if (reviewPRs.length) {
-    html += `<h3>PRs I'm Reviewing <button class="pr-comments-toggle" data-table="reviewing-prs-table">Expand Comments</button> <label style="font-weight:normal;font-size:12px;cursor:pointer;margin-left:6px;"><input type="checkbox" class="my-comments-filter" data-table="reviewing-prs-table" style="vertical-align:middle;margin-right:3px;">Only my comments</label></h3>`;
-    html += renderPRTable(reviewPRs, 'reviewing-prs-table');
-  }
-
-  if (approvedPRs.length) {
-    html += `<details><summary style="cursor:pointer;"><h3 style="display:inline;">PRs I've Approved (${approvedPRs.length})</h3></summary>`;
-    html += `<button class="pr-comments-toggle" data-table="approved-prs-table" style="margin:8px 0;">Expand Comments</button> <label style="font-weight:normal;font-size:12px;cursor:pointer;margin-left:6px;"><input type="checkbox" class="my-comments-filter" data-table="approved-prs-table" style="vertical-align:middle;margin-right:3px;">Only my comments</label>`;
-    html += renderPRTable(approvedPRs, 'approved-prs-table');
-    html += `</details>`;
-  } else {
-    html += `<h3>PRs I've Approved</h3><p class="meta">It's all good.</p>`;
-  }
-
-  if (!myPRs.length && !reviewPRs.length && !approvedPRs.length) {
-    html += `<h3>PRs Needing My Attention</h3><div style="color:#6b7280;">No open PRs needing attention.</div>`;
-  }
-
-  return html;
-}
-
-function renderPRTable(prs, tableId) {
-  const myUser = D.meta.github_user;
-  let html = `<table id="${tableId}"><thead><tr>`;
-  ['PR','Title','Author','Reviewers','My State','Checks','Created'].forEach(h => {
-    html += `<th>${h}<span class="sort-indicator">⇅</span><div class="resize-handle"></div></th>`;
-  });
-  html += `</tr></thead><tbody>`;
-  prs.forEach(pr => {
-    const st = (D.pr_status && D.pr_status[pr.number]) || {};
-    const reviewHtml = renderReviewers(st.reviewers, pr.status_badge);
-    const checksHtml = renderChecksBadge(st.checks || 'unknown');
-    const mergeHtml = renderMergeStatus(st.mergeable_state || '');
-    const statusHtml = mergeHtml ? checksHtml + '<br>' + mergeHtml : checksHtml;
-    const titleDisplay = (st.draft ? '[DRAFT] ' : '') + (pr.title || '');
-    const myReview = (st.reviewers || []).find(r => r.user === myUser);
-    const myState = myReview ? myReview.state : '';
-    const badgeColors = {'Awaiting review': '#6b7280', 'Changes requested': '#ef4444', 'Awaiting author': '#f59e0b', 'Approved': '#22c55e', 'Pending': '#6b7280'};
-    const stateColors = {approved: '#22c55e', changes_requested: '#ef4444', commented: '#f59e0b', pending: '#6b7280'};
-    const isMyPR = pr.author === myUser;
-    const stateLabel = isMyPR ? (pr.status_badge || '—') : (myState.replace('_', ' ') || '—');
-    const stateColor = isMyPR
-      ? (Object.entries(badgeColors).find(([k]) => (pr.status_badge || '').toLowerCase().includes(k.toLowerCase())) || [,'#6b7280'])[1]
-      : (stateColors[myState] || '#6b7280');
-    const createdAge = (() => {
-      const d = pr.created || pr.updated;
-      if (!d) return '—';
-      const days = Math.floor((new Date() - new Date(d)) / 86400000);
-      if (days === 0) return 'today';
-      if (days === 1) return '1 day ago';
-      return `${days} days ago`;
-    })();
-    html += `<tr><td class="nowrap">${ghLink(pr.number)}</td><td>${esc(titleDisplay)}</td><td>${esc(pr.author)}</td><td>${reviewHtml}</td><td class="nowrap" style="color:${stateColor};">${stateLabel}</td><td class="nowrap">${statusHtml}</td><td class="nowrap">${createdAge}</td></tr>`;
-    const comments = (pr.comments || []).slice().sort((a, b) => (b.when || '').localeCompare(a.when || ''));
-    html += `<tr class="pr-comments"><td></td><td colspan="6">`;
-    if (comments.length) {
-      const pageSize = 10;
-      const detailId = `comments-${tableId}-${pr.number}`;
-      html += `<details><summary>Show ${comments.length} comments</summary>`;
-      html += `<table id="${detailId}" style="width:100%;table-layout:fixed;border-collapse:collapse;font-size:11px;margin:4px 0 0;"><tbody>`;
-      let lastDate = '';
-      comments.forEach((c, i) => {
-        const dateOnly = (c.when || '').slice(0, 10);
-        const showDate = dateOnly !== lastDate;
-        lastDate = dateOnly;
-        const hidden = i >= pageSize;
-        html += `<tr data-comment-user="${esc(c.who)}" style="vertical-align:top;${hidden ? 'display:none;' : ''}"${hidden ? ' data-page-hidden="1"' : ''}>`;
-        html += `<td style="width:70px;color:#6b7280;white-space:nowrap;padding:${showDate ? '6px' : '2px'} 8px 2px 0;border:none;">${showDate ? esc(dateOnly) : ''}</td>`;
-        html += `<td style="width:110px;color:#60a5fa;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:${showDate ? '6px' : '2px'} 8px 2px 0;border:none;">${esc(c.who)}</td>`;
-        html += `<td style="color:#9ca3af;white-space:normal;word-wrap:break-word;overflow-wrap:break-word;padding:${showDate ? '6px' : '2px'} 0 2px 0;border:none;">${formatCommentBody(c.body)}</td>`;
-        html += `</tr>`;
-      });
-      html += `</tbody></table>`;
-      if (comments.length > pageSize) {
-        html += `<button class="load-more-comments" data-target="${detailId}" data-page-size="${pageSize}" style="margin:6px 0;background:rgba(165,180,252,0.12);border:1px solid rgba(165,180,252,0.3);color:#a5b4fc;font-size:11px;padding:3px 10px;border-radius:3px;cursor:pointer;">Load more (${comments.length - pageSize} remaining)</button>`;
-      }
-      html += `</details>`;
-    }
-    html += `</td></tr>`;
-  });
-  html += `</tbody></table>`;
-  return html;
-}
-
-function renderReviewers(reviewers, statusBadge) {
+function renderReviewers(reviewers) {
   if (!reviewers || !reviewers.length) return `<span style="color:#6b7280;">—</span>`;
-  const myUser = D.meta.github_user;
   const stateMap = {
     approved: {icon: '✓', color: '#22c55e'},
     changes_requested: {icon: '✗', color: '#ef4444'},
     commented: {icon: '💬', color: '#f59e0b'},
-    pending: {icon: '⏳', color: '#6b7280'}
+    pending: {icon: '⏳', color: '#6b7280'},
+    dismissed: {icon: '⊘', color: '#6b7280'}
   };
   return reviewers.map(r => {
     const s = stateMap[r.state] || stateMap.pending;
-    const displayName = r.via_team ? r.via_team.replace(/-/g, ' ') : r.user;
-    let parts = `<span style="color:${s.color};white-space:nowrap;" title="${r.via_team ? 'via team: ' + r.via_team : r.state}">${s.icon} ${esc(displayName)}</span>`;
-    if (r.user === myUser && r.state === 'changes_requested' && statusBadge === 'Awaiting author') {
-      parts += ' <span style="color:#f59e0b;font-size:0.85em;font-style:italic;white-space:nowrap;">awaiting author</span>';
-    }
-    return parts;
+    return `<span style="color:${s.color};white-space:nowrap;" title="${r.state}">${s.icon} ${esc(r.user)}</span>`;
   }).join(' <span style="color:#374151;">│</span> ');
 }
 
@@ -519,10 +338,10 @@ function renderRetroItems() {
   const retros = D.retro_items || [];
   if (!retros.length) return '<p class="meta">No retro action items found.</p>';
   const doneKeys = JSON.parse(localStorage.getItem('done_retro_items') || '[]');
-  const visible = retros.filter((item, idx) => !doneKeys.includes('retro|' + (item.text || '').slice(0, 80)));
+  const visible = retros.filter(item => !doneKeys.includes(retroItemKey(item)));
   if (!visible.length) return '<p class="meta">All retro items done. 🎉</p>';
 
-  let html = `<table id="retro-items-table" class="pr-table"><thead><tr>`;
+  let html = `<table id="retro-items-table"><thead><tr>`;
   ['#','Action','Sprint','Age','AI Summary','Done'].forEach(h => {
     html += `<th>${h}<span class="sort-indicator">⇅</span><div class="resize-handle"></div></th>`;
   });
@@ -530,16 +349,8 @@ function renderRetroItems() {
 
   for (let idx = 0; idx < visible.length; idx++) {
     const item = visible[idx];
-    const doneKey = 'retro|' + (item.text || '').slice(0, 80);
-    const age = item.date ? (() => {
-      const d = new Date(item.date);
-      const days = Math.floor((new Date() - d) / 86400000);
-      if (days === 0) return 'today';
-      if (days < 7) return `${days} days ago`;
-      const weeks = Math.floor(days / 7);
-      if (weeks < 5) return `~${weeks} week${weeks>1?'s':''} ago`;
-      return `~${Math.floor(days/30)} months ago`;
-    })() : (item.age || '');
+    const doneKey = retroItemKey(item);
+    const age = item.date ? formatAge(item.date) : (item.age || '');
     const aiDiamond = item.ai_summary ? `<span class="ai-diamond" title="${item.ai_summary.replace(/"/g,'&quot;')}">◆ ${item.ai_summary}</span>` : '';
     html += `<tr>
       <td class="nowrap">${idx + 1}</td>
@@ -570,7 +381,7 @@ function renderJiraMentions() {
   const items = (D.jira_mentions || []).filter(i => !hidden.has(i.key));
   let html = `<h3>JIRAs I'm Mentioned In</h3>`;
   if (!items.length) return html + `<p class="meta">It's all good.</p>`;
-  html += `<table id="jira-mentions-table" class="pr-table"><thead><tr>`;
+  html += `<table id="jira-mentions-table"><thead><tr>`;
   ['Ticket','Summary','Status','Assignee','Mentioned By','Date','Comment','Ack'].forEach(h => {
     html += `<th>${h}<span class="sort-indicator">⇅</span><div class="resize-handle"></div></th>`;
   });
@@ -604,38 +415,24 @@ function renderActionItems() {
   const open = items.filter(i => !i.completed);
   const done = items.filter(i => i.completed);
 
-  function ageStr(dateStr) {
-    if (!dateStr) return '';
-    const d = new Date(dateStr);
-    const now = new Date();
-    const days = Math.floor((now - d) / 86400000);
-    if (days === 0) return 'today';
-    if (days === 1) return '1 day ago';
-    if (days < 7) return `${days} days ago`;
-    const weeks = Math.floor(days / 7);
-    if (weeks < 5) return `~${weeks} week${weeks>1?'s':''} ago`;
-    const months = Math.floor(days / 30);
-    return `~${months} month${months>1?'s':''} ago`;
-  }
-
   function renderGroup(groupItems, groupLabel, tableId) {
     if (!groupItems.length) return '';
     const doneKeys = JSON.parse(localStorage.getItem('done_action_items') || '[]');
-    const visible = groupItems.filter(i => !doneKeys.includes(i.doc_id + '|' + (i.text || '').slice(0, 80)));
+    const visible = groupItems.filter(i => !doneKeys.includes(actionItemKey(i)));
     if (!visible.length && groupLabel) return '';
     let html = groupLabel ? `<h4 style="margin:12px 0 6px;">${groupLabel.replace(/\d+/, visible.length)}</h4>` : '';
-    html += `<table id="${tableId}" class="pr-table"><thead><tr>`;
+    html += `<table id="${tableId}"><thead><tr>`;
     ['#','Action','Source','Date','Age','AI Summary','Done'].forEach(h => {
       html += `<th>${h}<span class="sort-indicator">⇅</span><div class="resize-handle"></div></th>`;
     });
     html += `</tr></thead><tbody>`;
     for (let idx = 0; idx < visible.length; idx++) {
       const item = visible[idx];
-      const doneKey = item.doc_id + '|' + (item.text || '').slice(0, 80);
+      const doneKey = actionItemKey(item);
       const anchor = item.heading_id ? `#heading=${item.heading_id}` : '';
       const docUrl = `https://docs.google.com/document/d/${item.doc_id}/edit${anchor}`;
       const textStyle = item.completed ? 'text-decoration:line-through; opacity:0.6;' : '';
-      const age = ageStr(item.date);
+      const age = formatAge(item.date);
       const aiDiamond = item.ai_summary ? `<span class="ai-diamond" title="${item.ai_summary.replace(/"/g,'&quot;')}">◆ ${item.ai_summary}</span>` : '';
       const actionHtml = formatActionText(item.text);
       html += `<tr>
@@ -673,15 +470,15 @@ function renderJiraActionItems() {
   const items = D.jira_action_items || [];
   if (!items.length) return '<p class="meta">No Jira action items found.</p>';
   const doneKeys = JSON.parse(localStorage.getItem('done_jira_action_items') || '[]');
-  const visible = items.filter(item => !doneKeys.includes('jira-ai|' + item.key + '|' + (item.text || '').slice(0, 80)));
+  const visible = items.filter(item => !doneKeys.includes(jiraActionItemKey(item)));
   if (!visible.length) return '<p class="meta">All Jira action items done. 🎉</p>';
-  let html = `<table id="jira-action-items-table" class="pr-table"><thead><tr>`;
+  let html = `<table id="jira-action-items-table"><thead><tr>`;
   ['#','Action','Ticket','Source','Date','Done'].forEach(h => {
     html += `<th>${h}<span class="sort-indicator">⇅</span><div class="resize-handle"></div></th>`;
   });
   html += `</tr></thead><tbody>`;
   visible.forEach((item, idx) => {
-    const doneKey = 'jira-ai|' + item.key + '|' + (item.text || '').slice(0, 80);
+    const doneKey = jiraActionItemKey(item);
     html += `<tr>
       <td class="nowrap">${idx + 1}</td>
       <td>${esc(item.text)}</td>
@@ -701,18 +498,13 @@ function renderPage() {
   let html = `<h1>Activity Monitor</h1><div class="meta">Data fetched: ${ts}</div>`;
 
   html += `<div class="tab-bar">`;
-  html += `<button class="tab-btn active" data-tab="github">GitHub</button>`;
-  html += `<button class="tab-btn" data-tab="jira">Jira</button>`;
+  html += `<button class="tab-btn active" data-tab="jira">Jira</button>`;
   html += `<button class="tab-btn" data-tab="actions">Action Items</button>`;
   html += `</div>`;
 
-  html += `<div class="tab-panel active" id="tab-github">`;
-  html += renderPRs();
-  html += `</div>`;
-
-  html += `<div class="tab-panel" id="tab-jira">`;
-  html += renderEpicsTable();
+  html += `<div class="tab-panel active" id="tab-jira">`;
   html += renderJiraMentions();
+  html += renderEpicsTable();
   html += `</div>`;
 
   html += `<div class="tab-panel" id="tab-actions">`;
@@ -736,30 +528,20 @@ function initTabs() {
   });
 }
 
+// Drops any saved keys (ack'd/done state) whose source item no longer
+// exists in the current data — e.g. a Jira mention got resolved, or an
+// action item was deleted from the doc. Leaves everything else untouched.
+function pruneStaleKeys(storageKey, validKeys) {
+  const saved = JSON.parse(localStorage.getItem(storageKey) || '[]');
+  const pruned = saved.filter(k => validKeys.has(k));
+  if (pruned.length !== saved.length) localStorage.setItem(storageKey, JSON.stringify(pruned));
+}
+
 function pruneLocalStorage() {
-  // Prune acked Jira mentions no longer in the data (ticket closed/resolved)
-  const mentionKeys = new Set((D.jira_mentions || []).map(m => m.key));
-  const acked = JSON.parse(localStorage.getItem('ack_jira_mentions') || '[]');
-  const prunedAck = acked.filter(k => mentionKeys.has(k));
-  if (prunedAck.length !== acked.length) localStorage.setItem('ack_jira_mentions', JSON.stringify(prunedAck));
-
-  // Prune done action items no longer in the data
-  const actionKeys = new Set((D.action_items || []).map(i => i.doc_id + '|' + (i.text || '').slice(0, 80)));
-  const doneActions = JSON.parse(localStorage.getItem('done_action_items') || '[]');
-  const prunedActions = doneActions.filter(k => actionKeys.has(k));
-  if (prunedActions.length !== doneActions.length) localStorage.setItem('done_action_items', JSON.stringify(prunedActions));
-
-  // Prune done retro items no longer in the data
-  const retroKeys = new Set((D.retro_items || []).map(i => 'retro|' + (i.text || '').slice(0, 80)));
-  const doneRetro = JSON.parse(localStorage.getItem('done_retro_items') || '[]');
-  const prunedRetro = doneRetro.filter(k => retroKeys.has(k));
-  if (prunedRetro.length !== doneRetro.length) localStorage.setItem('done_retro_items', JSON.stringify(prunedRetro));
-
-  // Prune done Jira action items no longer in the data
-  const jiraAiKeys = new Set((D.jira_action_items || []).map(i => 'jira-ai|' + i.key + '|' + (i.text || '').slice(0, 80)));
-  const doneJiraAi = JSON.parse(localStorage.getItem('done_jira_action_items') || '[]');
-  const prunedJiraAi = doneJiraAi.filter(k => jiraAiKeys.has(k));
-  if (prunedJiraAi.length !== doneJiraAi.length) localStorage.setItem('done_jira_action_items', JSON.stringify(prunedJiraAi));
+  pruneStaleKeys('ack_jira_mentions', new Set((D.jira_mentions || []).map(m => m.key)));
+  pruneStaleKeys('done_action_items', new Set((D.action_items || []).map(actionItemKey)));
+  pruneStaleKeys('done_retro_items', new Set((D.retro_items || []).map(retroItemKey)));
+  pruneStaleKeys('done_jira_action_items', new Set((D.jira_action_items || []).map(jiraActionItemKey)));
 }
 
 function initInteractions() {
@@ -775,95 +557,6 @@ function initInteractions() {
         detailRow.classList.toggle('open');
         detailRow.style.display = detailRow.classList.contains('open') ? '' : 'none';
       }
-    });
-  });
-
-  // "Only my comments" filter checkboxes (per section, applies to all PRs in table)
-  document.querySelectorAll('.my-comments-filter').forEach(cb => {
-    cb.addEventListener('change', () => {
-      const tableId = cb.getAttribute('data-table');
-      const table = document.getElementById(tableId);
-      if (!table) return;
-      const myUser = D.meta.github_user;
-      const filtered = cb.checked;
-      // Process each PR's comment table
-      table.querySelectorAll('tr.pr-comments').forEach(commentRow => {
-        const innerTable = commentRow.querySelector('table[id]');
-        if (!innerTable) return;
-        const rows = innerTable.querySelectorAll('tr[data-comment-user]');
-        let anyVisible = false;
-        rows.forEach(r => {
-          const isPageHidden = r.hasAttribute('data-page-hidden');
-          if (filtered) {
-            const isMine = r.getAttribute('data-comment-user') === myUser;
-            r.style.display = isMine ? '' : 'none';
-            if (isMine) anyVisible = true;
-          } else {
-            r.style.display = isPageHidden ? 'none' : '';
-            if (!isPageHidden) anyVisible = true;
-          }
-        });
-        // Show/hide "no comments" message
-        let noMsg = innerTable.parentElement.querySelector('.no-my-comments');
-        if (filtered && !anyVisible) {
-          if (!noMsg) {
-            noMsg = document.createElement('div');
-            noMsg.className = 'no-my-comments';
-            noMsg.style.cssText = 'color:#6b7280;font-size:11px;font-style:italic;padding:4px 0;';
-            noMsg.textContent = 'No comments from you on this PR.';
-            innerTable.parentElement.insertBefore(noMsg, innerTable.nextSibling);
-          }
-          noMsg.style.display = '';
-        } else if (noMsg) {
-          noMsg.style.display = 'none';
-        }
-        // Hide/show load more button when filtered
-        const loadBtn = innerTable.parentElement.querySelector('.load-more-comments');
-        if (loadBtn) loadBtn.style.display = filtered ? 'none' : '';
-      });
-    });
-  });
-
-  // Load more comments pagination
-  document.querySelectorAll('.load-more-comments').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const table = document.getElementById(btn.getAttribute('data-target'));
-      if (!table) return;
-      const pageSize = parseInt(btn.getAttribute('data-page-size'));
-      const hiddenRows = Array.from(table.querySelectorAll('tr[data-page-hidden="1"]'));
-      const toShow = hiddenRows.slice(0, pageSize);
-      toShow.forEach(r => { r.style.display = ''; r.removeAttribute('data-page-hidden'); });
-      const remaining = hiddenRows.length - toShow.length;
-      if (remaining > 0) {
-        btn.textContent = `Load more (${remaining} remaining)`;
-      } else {
-        btn.remove();
-      }
-    });
-  });
-
-  // PR comments expand/collapse buttons — toggles <details> open state
-  document.querySelectorAll('.pr-comments-toggle').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const tableId = btn.getAttribute('data-table');
-      const table = document.getElementById(tableId);
-      if (!table) return;
-      const details = table.querySelectorAll('tr.pr-comments details');
-      const anyOpen = Array.from(details).some(d => d.open);
-      details.forEach(d => d.open = !anyOpen);
-      btn.textContent = anyOpen ? 'Expand Comments' : 'Collapse Comments';
-    });
-  });
-
-  // Draft PRs show/hide button
-  document.querySelectorAll('.draft-toggle').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const tableId = btn.getAttribute('data-draft-table');
-      const wrap = document.getElementById(tableId + '-wrap');
-      if (!wrap) return;
-      const visible = wrap.style.display !== 'none';
-      wrap.style.display = visible ? 'none' : '';
-      btn.textContent = visible ? btn.textContent.replace('Hide', 'Show') : btn.textContent.replace('Show', 'Hide');
     });
   });
 
@@ -893,11 +586,10 @@ function initInteractions() {
     });
   });
 
-  // Initial sort: epics by Target End asc
+  // Epics-table-only setup: initial sort + assignee/status dropdown population.
   const epicsTable = document.getElementById('epics-table');
   if (epicsTable) sortTable(epicsTable, 4, true);
 
-  // Populate dropdowns
   const assigneeSelect = document.getElementById('assignee-filter');
   const statusSelect = document.getElementById('status-filter');
   if (epicsTable && assigneeSelect && statusSelect) {
@@ -929,53 +621,25 @@ function initInteractions() {
     });
   });
 
-  // Ack checkboxes — Jira mentions
-  document.querySelectorAll('.ack-checkbox').forEach(cb => {
-    cb.addEventListener('change', () => {
-      const key = cb.getAttribute('data-key');
-      const acked = JSON.parse(localStorage.getItem('ack_jira_mentions') || '[]');
-      if (cb.checked && !acked.includes(key)) acked.push(key);
-      localStorage.setItem('ack_jira_mentions', JSON.stringify(acked));
-      cb.closest('tr').style.opacity = '0.3';
-      setTimeout(() => renderPage(), 400);
+  // Ack/Done checkboxes — Jira mentions, Google Docs action items, retro
+  // items, Jira action items. All four behave identically: append the
+  // item's key to a localStorage array, fade the row, then re-render.
+  function bindDismissCheckboxes(selector, storageKey, dataAttr) {
+    document.querySelectorAll(selector).forEach(cb => {
+      cb.addEventListener('change', () => {
+        const key = cb.getAttribute(dataAttr);
+        const saved = JSON.parse(localStorage.getItem(storageKey) || '[]');
+        if (cb.checked && !saved.includes(key)) saved.push(key);
+        localStorage.setItem(storageKey, JSON.stringify(saved));
+        cb.closest('tr').style.opacity = '0.3';
+        setTimeout(() => renderPage(), 400);
+      });
     });
-  });
-
-  // Done checkboxes — Google Docs action items
-  document.querySelectorAll('.done-action-checkbox').forEach(cb => {
-    cb.addEventListener('change', () => {
-      const key = cb.getAttribute('data-done-key');
-      const done = JSON.parse(localStorage.getItem('done_action_items') || '[]');
-      if (cb.checked && !done.includes(key)) done.push(key);
-      localStorage.setItem('done_action_items', JSON.stringify(done));
-      cb.closest('tr').style.opacity = '0.3';
-      setTimeout(() => renderPage(), 400);
-    });
-  });
-
-  // Done checkboxes — Retro items
-  document.querySelectorAll('.done-retro-checkbox').forEach(cb => {
-    cb.addEventListener('change', () => {
-      const key = cb.getAttribute('data-done-key');
-      const done = JSON.parse(localStorage.getItem('done_retro_items') || '[]');
-      if (cb.checked && !done.includes(key)) done.push(key);
-      localStorage.setItem('done_retro_items', JSON.stringify(done));
-      cb.closest('tr').style.opacity = '0.3';
-      setTimeout(() => renderPage(), 400);
-    });
-  });
-
-  // Done checkboxes — Jira action items
-  document.querySelectorAll('.done-jira-ai-checkbox').forEach(cb => {
-    cb.addEventListener('change', () => {
-      const key = cb.getAttribute('data-done-key');
-      const done = JSON.parse(localStorage.getItem('done_jira_action_items') || '[]');
-      if (cb.checked && !done.includes(key)) done.push(key);
-      localStorage.setItem('done_jira_action_items', JSON.stringify(done));
-      cb.closest('tr').style.opacity = '0.3';
-      setTimeout(() => renderPage(), 400);
-    });
-  });
+  }
+  bindDismissCheckboxes('.ack-checkbox', 'ack_jira_mentions', 'data-key');
+  bindDismissCheckboxes('.done-action-checkbox', 'done_action_items', 'data-done-key');
+  bindDismissCheckboxes('.done-retro-checkbox', 'done_retro_items', 'data-done-key');
+  bindDismissCheckboxes('.done-jira-ai-checkbox', 'done_jira_action_items', 'data-done-key');
 }
 
 function sortTable(table, colIdx, asc) {
@@ -985,7 +649,7 @@ function sortTable(table, colIdx, asc) {
   headers[colIdx].querySelector('.sort-indicator').textContent = asc ? '▲' : '▼';
   const tbody = table.querySelector('tbody');
   const isEpics = (table.id === 'epics-table');
-  const rows = Array.from(tbody.querySelectorAll('tr:not(.epic-detail):not(.pr-comments)'));
+  const rows = Array.from(tbody.querySelectorAll('tr:not(.epic-detail)'));
   rows.sort((a, b) => {
     let aV = a.cells[colIdx].textContent.trim(), bV = b.cells[colIdx].textContent.trim();
     if (aV === '—' || aV === '') aV = 'zzz';
@@ -997,9 +661,6 @@ function sortTable(table, colIdx, asc) {
     if (isEpics) {
       const id = row.getAttribute('data-epic-id');
       if (id) { const d = tbody.querySelector('tr.epic-detail[data-epic-id="'+id+'"]'); if (d) tbody.appendChild(d); }
-    } else {
-      const nx = row.nextElementSibling;
-      if (nx && nx.classList.contains('pr-comments')) tbody.appendChild(nx);
     }
   });
 }

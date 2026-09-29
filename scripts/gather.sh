@@ -66,191 +66,13 @@ echo "=== ACTIVITY MONITOR (since $SINCE_DATE, ${LOOKBACK_DAYS}d lookback) ==="
 echo ""
 
 # =====================================================
-# GITHUB PR SECTIONS (run first - populates GitHub tab)
-# =====================================================
-
-# --- Review requests for me ---
-echo "### SECTION: REVIEW_REQUESTS"
-REVIEW_REQUESTS_JSON=$(gh api --method GET search/issues \
-  -f "q=repo:${REPO} is:pr is:open user-review-requested:${GITHUB_USER}" \
-  -F per_page=30 \
-  --jq '[.items[] | {number, title: .title, author: .user.login, updated_at, created_at}]' 2>/dev/null || echo "[]")
-echo "$REVIEW_REQUESTS_JSON"
-REVIEW_REQUEST_NUMS=$(echo "$REVIEW_REQUESTS_JSON" | python3 -c "import sys,json; print(' '.join(str(p['number']) for p in json.load(sys.stdin)))" 2>/dev/null)
-echo ""
-
-# --- Section 3b: PRs where my review is stale (reviewed but new commits pushed) ---
-echo "### SECTION: STALE_REVIEWS"
-STALE_REVIEWS_JSON=$(gh api --method GET search/issues \
-  -f "q=repo:${REPO} is:pr is:open reviewed-by:${GITHUB_USER} -review:approved -author:${GITHUB_USER}" \
-  -F per_page=30 \
-  --jq '[.items[] | {number, title: .title, author: .user.login, updated_at, created_at}]' 2>/dev/null || echo "[]")
-echo "$STALE_REVIEWS_JSON"
-STALE_REVIEW_NUMS=$(echo "$STALE_REVIEWS_JSON" | python3 -c "import sys,json; print(' '.join(str(p['number']) for p in json.load(sys.stdin)))" 2>/dev/null)
-
-# PRs I've approved that are still open
-APPROVED_REVIEWS_JSON=$(gh api --method GET search/issues \
-  -f "q=repo:${REPO} is:pr is:open review:approved reviewed-by:${GITHUB_USER} -author:${GITHUB_USER}" \
-  -F per_page=30 \
-  --jq '[.items[] | {number, title: .title, author: .user.login, updated_at, created_at}]' 2>/dev/null || echo "[]")
-echo "### SECTION: APPROVED_REVIEWS"
-echo "$APPROVED_REVIEWS_JSON"
-echo ""
-APPROVED_REVIEW_NUMS=$(echo "$APPROVED_REVIEWS_JSON" | python3 -c "import sys,json; print(' '.join(str(p['number']) for p in json.load(sys.stdin)))" 2>/dev/null)
-
-MY_PR_NUMS=$(gh pr list --repo "$REPO" --author "$GITHUB_USER" --state open --json number --jq '.[].number' 2>/dev/null)
-echo ""
-
-# --- Section 3d: My open PRs (always include regardless of activity) ---
-echo "### SECTION: MY_OPEN_PRS"
-gh pr list --repo "$REPO" --author "$GITHUB_USER" --state open --json number,title,updatedAt,createdAt,isDraft \
-  --jq '[.[] | {number, title, updated_at: .updatedAt, created_at: .createdAt, is_draft: .isDraft}]' 2>/dev/null || echo "[]"
-echo ""
-
-# --- Section 4: Last 3 human comments for all PRs needing attention ---
-sleep 2
-# Reuses PR numbers collected from earlier sections (avoid duplicate API calls)
-echo "### SECTION: PR_COMMENTS"
-ALL_PR_NUMS=$(echo "$REVIEW_REQUEST_NUMS $STALE_REVIEW_NUMS $APPROVED_REVIEW_NUMS $MY_PR_NUMS" | tr ' ' '\n' | sort -un | tr '\n' ' ')
-
-echo "["
-FIRST=true
-for PR_NUM in $ALL_PR_NUMS; do
-  [[ -z "$PR_NUM" ]] && continue
-  COMMENTS=$(python3 -c "
-import subprocess, json, sys
-sys.path.insert(0, '$(dirname "$0")')
-from lib.shared import GITHUB_BOT_USERS
-pr_num = ${PR_NUM}
-repo = '${REPO}'
-owner, name = repo.split('/')
-all_comments = []
-
-# Issue comments (general PR conversation — these are never 'resolved')
-r = subprocess.run(['gh', 'api', f'repos/{repo}/issues/{pr_num}/comments',
-    '--jq', '[.[] | {user: .user.login, body: .body[:1500], updated_at: .created_at}]'],
-    capture_output=True, text=True, timeout=15)
-if r.returncode == 0 and r.stdout.strip():
-    all_comments.extend(json.loads(r.stdout))
-
-# Review comments — use GraphQL to get UNRESOLVED thread comments (last 5 per thread)
-query = '''query {
-  repository(owner: \"%s\", name: \"%s\") {
-    pullRequest(number: %d) {
-      reviewThreads(first: 50) {
-        nodes {
-          isResolved
-          comments(last: 5) {
-            nodes { author { login } body createdAt }
-          }
-        }
-      }
-    }
-  }
-}''' % (owner, name, pr_num)
-r = subprocess.run(['gh', 'api', 'graphql', '-f', f'query={query}'],
-    capture_output=True, text=True, timeout=15)
-if r.returncode == 0 and r.stdout.strip():
-    gql = json.loads(r.stdout)
-    threads = gql.get('data',{}).get('repository',{}).get('pullRequest',{}).get('reviewThreads',{}).get('nodes',[])
-    for thread in threads:
-        comments = thread.get('comments',{}).get('nodes',[])
-        for c in comments:
-            author = c.get('author',{}).get('login','')
-            all_comments.append({
-                'user': author,
-                'body': c.get('body','')[:1500],
-                'updated_at': c.get('createdAt','')
-            })
-
-# Review body text (formal review submissions with non-empty body)
-r = subprocess.run(['gh', 'api', f'repos/{repo}/pulls/{pr_num}/reviews',
-    '--jq', '[.[] | select(.body != null and .body != \"\") | {user: .user.login, body: .body[:1500], updated_at: .submitted_at, state: .state}]'],
-    capture_output=True, text=True, timeout=15)
-if r.returncode == 0 and r.stdout.strip():
-    reviews = json.loads(r.stdout)
-    for rev in reviews:
-        if rev.get('user') in GITHUB_BOT_USERS:
-            continue
-        state = rev.get('state', '')
-        prefix = ''
-        if state == 'CHANGES_REQUESTED':
-            prefix = '[Changes Requested] '
-        elif state == 'APPROVED':
-            prefix = '[Approved] '
-        all_comments.append({
-            'user': rev['user'],
-            'body': prefix + rev.get('body', '')[:800],
-            'updated_at': (rev.get('updated_at') or '')
-        })
-
-# Filter bots, sort by date, take last 30
-all_comments = [c for c in all_comments if c.get('user') not in GITHUB_BOT_USERS]
-all_comments.sort(key=lambda c: c.get('updated_at', ''))
-all_comments = all_comments[-30:]
-
-# Add pr number
-for c in all_comments:
-    c['pr'] = pr_num
-
-if all_comments:
-    print(','.join(json.dumps(c) for c in all_comments))
-" 2>/dev/null)
-  if [[ -n "$COMMENTS" ]]; then
-    if [[ "$FIRST" == "true" ]]; then FIRST=false; else echo ","; fi
-    echo "$COMMENTS"
-  fi
-done
-echo "]"
-echo ""
-
-# --- Section 4b: PR reviews and checks status for all PRs ---
-sleep 2
-echo "### SECTION: PR_STATUS"
-echo "{"
-
-FIRST=true
-for PR_NUM in $ALL_PR_NUMS; do
-  [[ -z "$PR_NUM" ]] && continue
-  STATUS=$(python3 -c "
-import subprocess, json, os, sys
-sys.path.insert(0, '$(dirname "$0")')
-from lib.shared import resolve_reviewers, get_checks_status
-pr_num = ${PR_NUM}
-repo = '${REPO}'
-github_user = os.environ['GITHUB_USER']
-
-# Get PR details
-mergeable_state = 'unknown'
-requested = []
-is_draft = False
-head_sha = ''
-try:
-    r = subprocess.run(['gh', 'api', f'repos/{repo}/pulls/{pr_num}', '--jq', '{requested: [.requested_reviewers[].login], mergeable_state: .mergeable_state, draft: .draft, head_sha: .head.sha}'], capture_output=True, text=True, timeout=15)
-    if r.returncode == 0 and r.stdout.strip():
-        pr_data = json.loads(r.stdout)
-        requested = pr_data.get('requested', [])
-        mergeable_state = pr_data.get('mergeable_state', 'unknown')
-        is_draft = pr_data.get('draft', False)
-        head_sha = pr_data.get('head_sha', '')
-except: pass
-
-reviewers, my_last_review_at = resolve_reviewers(pr_num, repo, github_user, requested)
-checks_status = get_checks_status(pr_num, repo)
-
-print(json.dumps({'reviewers': reviewers, 'checks': checks_status, 'mergeable_state': mergeable_state, 'draft': is_draft, 'head_sha': head_sha, 'my_last_review_at': my_last_review_at}))
-" 2>/dev/null)
-  if [[ -n "$STATUS" ]]; then
-    if [[ "$FIRST" == "true" ]]; then FIRST=false; else echo ","; fi
-    echo "\"${PR_NUM}\": ${STATUS}"
-  fi
-done
-echo "}"
-echo ""
-
-# =====================================================
 # JIRA / EPIC SECTIONS (populates Jira tab)
 # =====================================================
+# NOTE: The GitHub tab's main PR tables (My PRs / Reviewing / Approved) are
+# fetched live client-side via GraphQL from ACTIVITY_MONITOR.html and no
+# longer sourced from this script. CHILD_PR_STATUS below is unrelated —
+# it looks up PRs by Jira ticket key for the Jira tab's epic-children view
+# and is independently fetched, so it stays.
 
 # --- Section 1: ALL active epics with current fields + last 3 comments ---
 # Uses 'comment' field to get comments inline (1 API call instead of N+1)
@@ -342,8 +164,11 @@ print(json.dumps(results, indent=2))
 echo ""
 fi # end ALL_EPICS jira guard
 
-# --- Section 1b: Parent epic/feature date drift and status changes ---
-# Fetches ALL active OCMUI epics (not just recently updated) to check parent alignment
+# --- Section 1b: Parent target-end backfill + parent recent comments ---
+# Epics without their own Target End fall back to the parent's. Also
+# surfaces the parent's recent comments for the epic detail panel. The
+# epic's own summary/status/assignee/target_end already come from
+# ALL_EPICS above — this section only needs the epic->parent mapping.
 echo "### SECTION: PARENT_EPIC_STATUS"
 if ! $JIRA_OK; then jira_skip; else
 curl -s -u "$JIRA_EMAIL:$JIRA_TOKEN" \
@@ -351,34 +176,27 @@ curl -s -u "$JIRA_EMAIL:$JIRA_TOKEN" \
   -G \
   --data-urlencode "jql=project = ${JIRA_PROJECT} AND issuetype = Epic AND status in (\"In Progress\", Review, Refinement, Backlog) ORDER BY \"Target end\" ASC" \
   --data-urlencode "maxResults=30" \
-  --data-urlencode "fields=key,summary,status,assignee,customfield_10023,parent,customfield_10542" \
+  --data-urlencode "fields=key,parent" \
   --data-urlencode "expand=names" | python3 -c "
-import sys, json, subprocess, os, re
+import sys, json, os, re
 sys.path.insert(0, '$(dirname "$0")')
 from lib.shared import JIRA_BOT_AUTHORS, adf_to_text
 
 data = json.load(sys.stdin)
 jira_email = os.environ.get('JIRA_EMAIL', '')
 jira_token = os.environ.get('JIRA_TOKEN', '')
-since = '${SINCE_DATE}'
-lookback_days = ${LOOKBACK_DAYS}
 
 # Discover parent link fields from names
 names = data.get('names', {})
 parent_link_fields = [fid for fid, label in names.items()
                       if 'parent link' in str(label).lower()]
 
-# Collect epics with their parent keys
-epics_with_parents = []
+# Collect epic -> parent_key mapping
+epic_parents = {}
 for issue in data.get('issues', []):
     key = issue['key']
     fields = issue['fields']
-    summary = fields.get('summary', '')[:80]
-    target_end = fields.get('customfield_10023', '')
-    assignee = (fields.get('assignee') or {}).get('displayName', 'Unassigned')
-    status = fields.get('status', {}).get('name', '')
 
-    # Find parent key
     parent_key = None
     if fields.get('parent', {}).get('key'):
         parent_key = fields['parent']['key']
@@ -393,29 +211,20 @@ for issue in data.get('issues', []):
                 break
 
     if parent_key:
-        epics_with_parents.append({
-            'key': key,
-            'summary': summary,
-            'status': status,
-            'assignee': assignee,
-            'target_end': target_end or None,
-            'parent_key': parent_key
-        })
+        epic_parents[key] = parent_key
 
-# Fetch parent tickets in batch (deduplicate parent keys)
-parent_keys = list(set(e['parent_key'] for e in epics_with_parents))
+# Fetch parent tickets in batch (deduplicate parent keys) for target_end
+parent_keys = list(set(epic_parents.values()))
 parent_data = {}
 
 if parent_keys:
-    # Batch fetch parents (up to 30)
     keys_jql = ','.join(parent_keys[:30])
     import urllib.request, urllib.parse, base64
     auth = base64.b64encode(f'{jira_email}:{jira_token}'.encode()).decode()
     params = urllib.parse.urlencode({
         'jql': f'key in ({keys_jql})',
         'maxResults': 30,
-        'fields': 'key,summary,status,customfield_10023,description,updated',
-        'expand': 'changelog'
+        'fields': 'key,customfield_10023'
     })
     url = f'https://${JIRA_INSTANCE}/rest/api/3/search/jql?{params}'
     req = urllib.request.Request(url, headers={
@@ -427,44 +236,14 @@ if parent_keys:
             parent_response = json.loads(resp.read())
         for p in parent_response.get('issues', []):
             pkey = p['key']
-            pfields = p['fields']
-            # Extract target end from parent
-            p_target_end = pfields.get('customfield_10023', '')
-            # Extract description text (ADF -> plain text, first 500 chars)
-            desc_text = adf_to_text(pfields.get('description'), 500)
-
-            # Check changelog for recent Target end changes
-            p_changes = []
-            for history in (p.get('changelog', {}).get('histories', []) or []):
-                created = history.get('created', '')
-                if created[:10] < since:
-                    continue
-                author = history.get('author', {}).get('displayName', 'Unknown')
-                for item in history.get('items', []):
-                    field = item.get('field', '')
-                    if field in ('Target end', 'status', 'description', 'Description'):
-                        p_changes.append({
-                            'field': field,
-                            'from': (item.get('fromString') or '')[:80],
-                            'to': (item.get('toString') or '')[:80],
-                            'who': author,
-                            'when': created[:10]
-                        })
-
             parent_data[pkey] = {
-                'key': pkey,
-                'summary': (pfields.get('summary') or '')[:80],
-                'status': (pfields.get('status') or {}).get('name', ''),
-                'target_end': p_target_end or None,
-                'description_excerpt': desc_text,
-                'updated': (pfields.get('updated') or '')[:10],
-                'recent_changes': p_changes,
+                'target_end': p['fields'].get('customfield_10023') or None,
                 'recent_comments': []
             }
-    except Exception as e:
+    except Exception:
         pass
 
-# Fetch last 8 comments for all parents
+# Fetch last 8 non-bot comments for all parents
 for pkey in list(parent_data.keys()):
     try:
         comment_url = f'https://${JIRA_INSTANCE}/rest/api/3/issue/{pkey}/comment?orderBy=-created&maxResults=8'
@@ -483,37 +262,22 @@ for pkey in list(parent_data.keys()):
             comments.append({
                 'author': author_name,
                 'created': (c.get('created') or '')[:10],
-                'updated': (c.get('updated') or '')[:10],
                 'body': body_text
             })
         parent_data[pkey]['recent_comments'] = comments
-    except:
+    except Exception:
         pass
 
-# Build results for all epics with parents
+# Build results: epic -> parent target_end + comments
 results = []
-for epic in epics_with_parents:
-    parent = parent_data.get(epic['parent_key'])
+for epic_key, parent_key in epic_parents.items():
+    parent = parent_data.get(parent_key)
     if not parent:
         continue
-    
-    date_mismatch = False
-    if epic['target_end'] and parent['target_end']:
-        date_mismatch = (epic['target_end'] != parent['target_end'])
-
     results.append({
-        'epic_key': epic['key'],
-        'epic_summary': epic['summary'],
-        'epic_target_end': epic['target_end'],
-        'epic_assignee': epic['assignee'],
-        'parent_key': epic['parent_key'],
-        'parent_summary': parent['summary'],
+        'epic_key': epic_key,
+        'parent_key': parent_key,
         'parent_target_end': parent['target_end'],
-        'parent_status': parent['status'],
-        'parent_updated': parent['updated'],
-        'parent_description_excerpt': parent['description_excerpt'],
-        'date_mismatch': date_mismatch,
-        'parent_recent_changes': parent.get('recent_changes', []),
         'parent_recent_comments': parent.get('recent_comments', [])
     })
 
@@ -663,7 +427,7 @@ for key in child_keys:
                 ['gh', 'api', '--method', 'GET', 'search/issues',
                  '-f', f'q=repo:{REPO} is:pr is:open {key} {search_scope}',
                  '-F', 'per_page=1',
-                 '--jq', '.items[0] | {number, title, state, html_url, user: .user.login, updated_at}'],
+                 '--jq', '.items[0] | {number, title, user: .user.login}'],
                 capture_output=True, text=True, timeout=15
             )
             if search_result.returncode == 0 and search_result.stdout.strip():
@@ -690,7 +454,7 @@ for key in child_keys:
                 mergeable_state = pr_extra.get('mergeable_state', 'unknown')
         except: pass
 
-        reviewers, _ = resolve_reviewers(pr_num, REPO, github_user, requested)
+        reviewers = resolve_reviewers(pr_num, REPO, github_user, requested)
         approvals = sum(1 for r in reviewers if r['state'] == 'approved')
         changes_requested = sum(1 for r in reviewers if r['state'] == 'changes_requested')
 
@@ -737,9 +501,7 @@ for key in child_keys:
         results[key] = {
             'pr_number': pr_num,
             'pr_title': pr_info.get('title', ''),
-            'pr_state': pr_info.get('state', ''),
             'pr_author': pr_info.get('user', ''),
-            'pr_updated': pr_info.get('updated_at', '')[:10],
             'approvals': approvals,
             'changes_requested': changes_requested,
             'reviewers': reviewers,

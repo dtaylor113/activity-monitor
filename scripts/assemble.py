@@ -35,79 +35,6 @@ def parse_json_safe(content, default=None):
             return default if default is not None else {}
 
 
-def generate_pr_status_badge(pr, pr_st, github_user):
-    """Generate a compact status badge for a PR.
-
-    Returns a short string indicating the ball-in-court status:
-    - "Changes requested by {user}" — another reviewer requested changes, awaiting author
-    - "Awaiting author" — you requested changes or commented last, author hasn't replied
-    - "Needs your re-review" — author pushed or replied after changes were requested
-    - "New activity since approval" — user approved but new comments appeared
-    - "Approved" — user approved, no new activity since
-    - "Pending" — user hasn't reviewed yet
-    """
-    comments = pr.get('comments', [])
-    reviewers = pr_st.get('reviewers', []) if pr_st else []
-    author = pr.get('author', '')
-    is_mine = pr.get('is_mine', False) or author == github_user
-    head_sha = pr_st.get('head_sha', '') if pr_st else ''
-    my_last_review_at = pr_st.get('my_last_review_at', '') if pr_st else ''
-
-    if is_mine:
-        pending = [r for r in reviewers if r.get('state') == 'pending']
-        approved = [r for r in reviewers if r.get('state') == 'approved']
-        changes_req = [r for r in reviewers if r.get('state') == 'changes_requested']
-        if changes_req:
-            names = ', '.join(r['user'] for r in changes_req)
-            return f'Changes requested by {names}' if len(changes_req) == 1 else 'Changes requested'
-        if approved:
-            return f'{len(approved)} approved'
-        if pending:
-            return 'Awaiting review'
-        if not reviewers:
-            return 'No reviewers'
-        return ''
-
-    my_review = next((r for r in reviewers if r.get('user') == github_user), None)
-    my_state = (my_review or {}).get('state', 'pending')
-
-    non_bot_comments = [c for c in comments if c.get('who', '') not in
-                        {'coderabbitai[bot]', 'codecov[bot]', 'sourcery-ai[bot]'}]
-
-    others_cr = [r for r in reviewers if r.get('state') == 'changes_requested' and r.get('user') != github_user]
-    author_replied_last = non_bot_comments and non_bot_comments[0].get('who', '') == author
-
-    if my_state == 'approved':
-        if my_last_review_at and non_bot_comments:
-            latest_comment = non_bot_comments[0]
-            if latest_comment.get('when', '') > my_last_review_at[:10] and latest_comment.get('who', '') != github_user:
-                if author_replied_last:
-                    return 'Needs your re-review'
-                return 'New activity since approval'
-        return 'Approved'
-
-    if my_state == 'changes_requested':
-        if author_replied_last:
-            return 'Needs your re-review'
-        return 'Awaiting author'
-
-    # pending or commented — check if another reviewer's changes_requested is blocking
-    if others_cr and not author_replied_last:
-        names = ', '.join(r['user'] for r in others_cr)
-        return f'Changes requested by {names}'
-
-    if my_state == 'commented':
-        if non_bot_comments:
-            latest = non_bot_comments[0]
-            if latest.get('who', '') == github_user:
-                return 'Awaiting author'
-            if author_replied_last:
-                return 'Needs your re-review'
-        return 'Pending'
-
-    return 'Pending'
-
-
 def load_previous_ai(output_dir):
     """Load AI summary fields from existing activity-data.js."""
     path = os.path.join(output_dir, 'activity-data.js')
@@ -133,11 +60,6 @@ def assemble(raw, output_dir):
     epic_children = parse_json_safe(extract_section(raw, 'EPIC_CHILDREN'), {})
     child_pr_status = parse_json_safe(extract_section(raw, 'CHILD_PR_STATUS'), {})
     siblings = parse_json_safe(extract_section(raw, 'SIBLINGS'), {})
-    review_requests = json.loads(extract_section(raw, 'REVIEW_REQUESTS') or '[]')
-    stale_reviews = json.loads(extract_section(raw, 'STALE_REVIEWS') or '[]')
-    approved_reviews = json.loads(extract_section(raw, 'APPROVED_REVIEWS') or '[]')
-    my_open_prs = json.loads(extract_section(raw, 'MY_OPEN_PRS') or '[]')
-    pr_status = parse_json_safe(extract_section(raw, 'PR_STATUS'), {})
     action_items_raw = extract_section(raw, 'ACTION_ITEMS')
     action_items = json.loads(action_items_raw) if action_items_raw else []
 
@@ -147,97 +69,22 @@ def assemble(raw, output_dir):
     jira_mentions_raw = extract_section(raw, 'JIRA_MENTIONS')
     jira_mentions = json.loads(jira_mentions_raw) if jira_mentions_raw else []
 
-    pc_raw = extract_section(raw, 'PR_COMMENTS')
-    pr_comments_flat = []
-    if pc_raw:
-        nested = json.loads(f'[{pc_raw}]')
-        for entry in nested:
-            if isinstance(entry, list):
-                pr_comments_flat.extend(entry)
-            elif isinstance(entry, dict):
-                pr_comments_flat.append(entry)
-
-    # Parent alignment and comments
-    parent_alignment, parent_comments = {}, {}
+    # Backfill epic target_end from parent when the epic's own field is
+    # empty, and collect each parent's recent comments for the detail panel.
+    parent_target_end_by_epic, parent_comments = {}, {}
     for item in parent_list:
-        ek, pk = item['epic_key'], item['parent_key']
-        parent_alignment[ek] = {
-            'parent_key': pk,
-            'parent_summary': item.get('parent_summary', ''),
-            'parent_target_end': item.get('parent_target_end'),
-            'parent_status': item.get('parent_status', ''),
-            'date_mismatch': item.get('date_mismatch', False),
-            'near_due': False
-        }
+        pk = item['parent_key']
+        parent_target_end_by_epic[item['epic_key']] = item.get('parent_target_end')
         if item.get('parent_recent_comments') and pk not in parent_comments:
             parent_comments[pk] = item['parent_recent_comments']
 
     for epic in epics:
-        pa = parent_alignment.get(epic['key'])
-        if pa and pa.get('parent_target_end') and not epic.get('parent_target_end'):
-            epic['parent_target_end'] = pa['parent_target_end']
+        parent_target_end = parent_target_end_by_epic.get(epic['key'])
+        if parent_target_end and not epic.get('parent_target_end'):
+            epic['parent_target_end'] = parent_target_end
 
-    # Build PR map
-    pr_map = {}
-    for pr in my_open_prs:
-        pr_map[pr['number']] = {
-            'number': pr['number'], 'title': pr['title'], 'author': github_user,
-            'is_mine': True, 'updated': pr['updated_at'][:10],
-            'created': (pr.get('created_at') or '')[:10],
-            'what': 'Draft' if pr.get('is_draft') else '', 'comments': []
-        }
-    for pr in review_requests:
-        if pr['number'] not in pr_map:
-            pr_map[pr['number']] = {
-                'number': pr['number'], 'title': pr['title'], 'author': pr['author'],
-                'is_mine': False, 'updated': pr['updated_at'][:10],
-                'created': (pr.get('created_at') or '')[:10],
-                'what': 'review requested', 'comments': []
-            }
-    for pr in stale_reviews:
-        if pr['number'] not in pr_map:
-            pr_map[pr['number']] = {
-                'number': pr['number'], 'title': pr['title'], 'author': pr['author'],
-                'is_mine': False, 'updated': pr['updated_at'][:10],
-                'created': (pr.get('created_at') or '')[:10],
-                'what': 'stale review', 'comments': []
-            }
-        else:
-            entry = pr_map[pr['number']]
-            if 'stale' not in entry.get('what', ''):
-                entry['what'] = ('stale review, ' + entry.get('what', '')).strip(', ')
-    # Group PR comments
-    pr_comments_by_num = {}
-    for c in pr_comments_flat:
-        if not isinstance(c, dict):
-            continue
-        num = c.get('pr')
-        if num:
-            pr_comments_by_num.setdefault(num, []).append({
-                'who': c.get('user', ''),
-                'when': c.get('updated_at', ''),
-                'body': c.get('body', '')[:1500]
-            })
-    for num, comments in pr_comments_by_num.items():
-        if num in pr_map:
-            pr_map[num]['comments'] = sorted(comments, key=lambda x: x['when'], reverse=True)[:30]
-
-    # Add approved PRs that aren't already in pr_map
-    for pr in approved_reviews:
-        if pr['number'] not in pr_map:
-            pr_map[pr['number']] = {
-                'number': pr['number'], 'title': pr['title'], 'author': pr['author'],
-                'is_mine': False, 'updated': pr['updated_at'][:10],
-                'created': (pr.get('created_at') or '')[:10],
-                'what': 'approved', 'comments': []
-            }
-
-    prs_list = sorted(pr_map.values(), key=lambda x: x['updated'])
-
-    # Filter bots from reviewers
-    for num, st in pr_status.items():
-        if isinstance(st, dict):
-            st['reviewers'] = [r for r in st.get('reviewers', []) if r['user'] not in bot_users]
+    # Filter bots from reviewers (child_pr_status only — main PR tables are
+    # fetched live client-side from ACTIVITY_MONITOR.html, see gather.sh note)
     for key, cpr in child_pr_status.items():
         if isinstance(cpr, dict):
             cpr['reviewers'] = [r for r in cpr.get('reviewers', []) if r['user'] not in bot_users]
@@ -246,7 +93,6 @@ def assemble(raw, output_dir):
     data = {
         'meta': {
             'last_checked': datetime.now().astimezone().isoformat(),
-            'lookback_days': 3,
             'github_user': github_user
         },
         'epics': epics,
@@ -256,8 +102,6 @@ def assemble(raw, output_dir):
         'child_pr_status': child_pr_status,
         'siblings': siblings,
         'siblings_ai': {},
-        'prs': prs_list,
-        'pr_status': pr_status,
         'action_items': action_items,
         'jira_action_items': jira_action_items,
         'jira_mentions': jira_mentions,
@@ -332,11 +176,6 @@ def assemble(raw, output_dir):
                 if pm.get('mention_text') == item.get('mention_text'):
                     item['ai_summary'] = pm['ai_summary']
 
-    # Generate status badges for all PRs (deterministic, always regenerated)
-    for pr in data['prs']:
-        pr_st = pr_status.get(str(pr['number']))
-        pr['status_badge'] = generate_pr_status_badge(pr, pr_st, github_user)
-
     # Write output
     output_path = os.path.join(output_dir, 'activity-data.js')
     with open(output_path, 'w') as f:
@@ -344,7 +183,7 @@ def assemble(raw, output_dir):
         json.dump(data, f, indent=2)
         f.write(';')
 
-    return len(epics), len(prs_list), len(child_pr_status), len(action_items), len(jira_mentions)
+    return len(epics), len(child_pr_status), len(action_items), len(jira_mentions)
 
 
 def main():
@@ -361,8 +200,8 @@ def main():
         with open(input_path) as f:
             raw = f.read()
 
-    n_epics, n_prs, n_child_prs, n_actions, n_jira_mentions = assemble(raw, output_dir)
-    print(f"[activity-monitor] Assembled: {n_epics} epics, {n_prs} PRs, {n_child_prs} child PRs, {n_actions} action items, {n_jira_mentions} jira mentions")
+    n_epics, n_child_prs, n_actions, n_jira_mentions = assemble(raw, output_dir)
+    print(f"[activity-monitor] Assembled: {n_epics} epics, {n_child_prs} child PRs, {n_actions} action items, {n_jira_mentions} jira mentions")
 
 
 if __name__ == '__main__':

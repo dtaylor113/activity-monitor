@@ -1,0 +1,796 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Git Activity</title>
+<!-- GFM rendering for comment bodies (tables, fenced code, lists, etc.) -->
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: #0a0a0a;
+  color: #e5e7eb;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 14px;
+  padding: 12px 1vw;
+  width: 98vw;
+}
+h1 { font-size: 1.6em; margin-bottom: 4px; color: #fff; }
+h3 { font-size: 1.1em; margin: 18px 0 6px 0; color: #a5b4fc; }
+.meta { color: #9ca3af; font-size: 0.85em; margin-bottom: 16px; }
+a { color: #60a5fa; text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+table { width: 100%; border-collapse: collapse; font-size: 13px; margin: 8px 0 16px 0; }
+th, td { border: 1px solid #333; padding: 6px 10px; text-align: left; vertical-align: top; }
+th {
+  background: #1f2937; color: #d1d5db; font-weight: 600;
+  position: relative; cursor: pointer; user-select: none; white-space: nowrap;
+}
+th:hover { background: #374151; }
+th.no-sort { cursor: default; }
+th.no-sort:hover { background: #1f2937; }
+th .sort-indicator { font-size: 10px; margin-left: 4px; opacity: 0.5; }
+th.sorted .sort-indicator { opacity: 1; }
+td { background: #111; }
+tr:hover td { background: #1a1a2e; }
+.nowrap { white-space: nowrap; }
+
+th .resize-handle { position: absolute; right: 0; top: 0; bottom: 0; width: 5px; cursor: col-resize; background: transparent; }
+th .resize-handle:hover, th .resize-handle.active { background: #60a5fa; }
+
+p { margin: 6px 0; }
+/* PR comment sub-rows */
+tr.pr-comments td { background: #0d0d1a; border-top: none; padding: 3px 10px 6px 10px; font-size: 11px; color: #9ca3af; line-height: 1.4; }
+.pr-comments-toggle { background: rgba(165, 180, 252, 0.12); border: 1px solid rgba(165, 180, 252, 0.3); color: #a5b4fc; font-size: 11px; padding: 3px 10px; border-radius: 3px; cursor: pointer; margin-left: 10px; vertical-align: middle; }
+.pr-comments-toggle:hover { background: rgba(165, 180, 252, 0.2); }
+.draft-toggle { background: rgba(165, 180, 252, 0.12); border: 1px solid rgba(165, 180, 252, 0.3); color: #a5b4fc; font-size: 11px; padding: 3px 10px; border-radius: 3px; cursor: pointer; margin-left: 6px; vertical-align: middle; }
+.draft-toggle:hover { background: rgba(165, 180, 252, 0.2); }
+
+.git-live-btn { background: rgba(165, 180, 252, 0.12); border: 1px solid rgba(165, 180, 252, 0.3); color: #a5b4fc; font-size: 12px; padding: 4px 12px; border-radius: 3px; cursor: pointer; margin-right: 6px; }
+.git-live-btn:hover { background: rgba(165, 180, 252, 0.2); }
+
+.unread-badge { background: #ef4444; color: #fff; font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 9px; margin-left: 6px; vertical-align: middle; letter-spacing: 0.2px; }
+
+/* Markdown rendered from comment bodies via marked.js — scoped to avoid
+   inheriting the outer PR tables' sortable/resizable th/td styling. */
+.comment-body p { margin: 4px 0; }
+.comment-body p:first-child { margin-top: 0; }
+.comment-body p:last-child { margin-bottom: 0; }
+.comment-body pre { background: #050508; border: 1px solid #262b36; border-radius: 4px; padding: 8px 10px; overflow-x: auto; font-size: 11px; line-height: 1.5; margin: 4px 0; }
+.comment-body pre code { background: none; padding: 0; border: none; font-size: inherit; }
+.comment-body code { background: #1f2430; color: #e5e7eb; padding: 1px 5px; border-radius: 3px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
+.comment-body table { width: auto; max-width: 100%; font-size: 11px; margin: 6px 0; }
+.comment-body th, .comment-body td { border: 1px solid #262b36; padding: 4px 8px; background: #0d0d1a; white-space: normal; position: static; cursor: default; }
+.comment-body th:hover, .comment-body td:hover { background: #0d0d1a; }
+.comment-body blockquote { border-left: 2px solid #4b5563; padding: 2px 0 2px 8px; margin: 3px 0; color: #6b7280; font-style: italic; }
+.comment-body ul, .comment-body ol { margin: 4px 0 4px 20px; }
+.comment-body a { color: #60a5fa; }
+.comment-body hr { border: none; border-top: 1px solid #262b36; margin: 6px 0; }
+
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+(function(){
+  var s = document.createElement('script');
+  s.src = 'activity-data.js?t=' + Date.now();
+  s.onload = function(){ renderPage(); };
+  document.head.appendChild(s);
+})();
+</script>
+<script>
+const JIRA = 'https://redhat.atlassian.net/browse/';
+const GH = 'https://github.com/RedHatInsights/uhc-portal/pull/';
+
+function ghLink(n) { return `<a href="${GH}${n}">#${n}</a>`; }
+function esc(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+if (window.marked) marked.setOptions({ gfm: true, breaks: true });
+
+// Renders a raw GitHub comment body as full GitHub-Flavored Markdown (code
+// fences, inline code, tables, lists, blockquotes, links, bold/italic) via
+// marked.js. Embedded <img> HTML tags (GitHub's pasted-screenshot markup)
+// are pulled out first and re-inserted as sized thumbnail links afterward,
+// since marked would otherwise pass the raw tag through unstyled.
+function formatCommentBody(text) {
+  if (!text) return '';
+  const imgMap = {};
+  let imgCount = 0;
+  const withTokens = text.replace(/<img\b[^>]*>/gi, (tag) => {
+    const srcMatch = tag.match(/src="([^"]+)"/i);
+    if (!srcMatch) return '';
+    const altMatch = tag.match(/alt="([^"]*)"/i);
+    const token = `@@IMG${imgCount}@@`;
+    const altText = esc(altMatch && altMatch[1] ? altMatch[1] : 'image');
+    imgMap[token] = `<a href="${esc(srcMatch[1])}" target="_blank" rel="noopener"><img src="${esc(srcMatch[1])}" alt="${altText}" title="${altText}" style="max-width:240px;max-height:160px;border:1px solid #374151;border-radius:4px;vertical-align:top;margin:2px 0;display:block;"></a>`;
+    imgCount++;
+    return token;
+  });
+  // Fall back to plain escaped text (preserving line breaks) if the marked
+  // CDN failed to load — e.g. opened offline.
+  let html = window.marked
+    ? marked.parse(withTokens)
+    : esc(withTokens).replace(/\r?\n/g, '<br>');
+  for (const token of Object.keys(imgMap)) {
+    html = html.split(token).join(imgMap[token]);
+  }
+  return html;
+}
+
+// Unread-comment tracking: remembers, per PR, the timestamp of the newest
+// comment visible the last time you expanded that PR's comment thread.
+// Anything newer than that bookmark counts as "unread".
+const COMMENTS_SEEN_KEY = 'pr_comments_seen';
+function getCommentsSeenMap() {
+  try { return JSON.parse(localStorage.getItem(COMMENTS_SEEN_KEY) || '{}'); } catch (e) { return {}; }
+}
+function getCommentSeenUpTo(prNumber) {
+  return getCommentsSeenMap()[String(prNumber)] || '';
+}
+function markCommentsSeen(prNumber, upToWhen) {
+  const map = getCommentsSeenMap();
+  map[String(prNumber)] = upToWhen;
+  localStorage.setItem(COMMENTS_SEEN_KEY, JSON.stringify(map));
+}
+
+function renderPRs() {
+  const myUser = D.meta.github_user;
+  const byPrNumberAsc = (a, b) => a.number - b.number;
+  const myPRs = D.prs.filter(pr => pr.author === myUser).sort(byPrNumberAsc);
+
+  const reviewPRs = [];
+  const approvedPRs = [];
+
+  D.prs.forEach(pr => {
+    if (pr.author === myUser) return;
+    const st = D.pr_status && D.pr_status[pr.number];
+    if (!st || !st.reviewers) return;
+    const myReview = st.reviewers.find(r => r.user === myUser);
+    if (!myReview) return;
+
+    if (myReview.state === 'approved') {
+      approvedPRs.push(pr);
+      return;
+    }
+
+    reviewPRs.push(pr);
+  });
+
+  // All tables default-sort by PR number, oldest first (matches the PR
+  // column header's initial state; click any header to re-sort).
+  reviewPRs.sort(byPrNumberAsc);
+  approvedPRs.sort(byPrNumberAsc);
+
+  let html = '';
+
+  if (myPRs.length) {
+    const nonDraftPRs = myPRs.filter(pr => {
+      const st = D.pr_status && D.pr_status[pr.number];
+      return !st || !st.draft;
+    });
+    const draftPRs = myPRs.filter(pr => {
+      const st = D.pr_status && D.pr_status[pr.number];
+      return st && st.draft;
+    });
+    html += `<h3>My PRs <button class="pr-comments-toggle" data-table="my-prs-table">Expand Comments</button>`;
+    if (draftPRs.length) {
+      html += ` <button class="draft-toggle" data-draft-table="my-draft-prs-table">Show Draft PRs (${draftPRs.length})</button>`;
+    }
+    html += ` <label style="font-weight:normal;font-size:12px;cursor:pointer;margin-left:6px;"><input type="checkbox" class="my-comments-filter" data-table="my-prs-table" style="vertical-align:middle;margin-right:3px;">Only my comments</label></h3>`;
+    html += renderPRTable(nonDraftPRs, 'my-prs-table');
+    if (draftPRs.length) {
+      html += `<div id="my-draft-prs-table-wrap" style="display:none;">`;
+      html += renderPRTable(draftPRs, 'my-draft-prs-table');
+      html += `</div>`;
+    }
+  }
+
+  if (reviewPRs.length) {
+    html += `<h3>PRs I'm Reviewing <button class="pr-comments-toggle" data-table="reviewing-prs-table">Expand Comments</button> <label style="font-weight:normal;font-size:12px;cursor:pointer;margin-left:6px;"><input type="checkbox" class="my-comments-filter" data-table="reviewing-prs-table" style="vertical-align:middle;margin-right:3px;">Only my comments</label></h3>`;
+    html += renderPRTable(reviewPRs, 'reviewing-prs-table');
+  }
+
+  if (approvedPRs.length) {
+    html += `<details><summary style="cursor:pointer;"><h3 style="display:inline;">PRs I've Approved (${approvedPRs.length})</h3></summary>`;
+    html += `<button class="pr-comments-toggle" data-table="approved-prs-table" style="margin:8px 0;">Expand Comments</button> <label style="font-weight:normal;font-size:12px;cursor:pointer;margin-left:6px;"><input type="checkbox" class="my-comments-filter" data-table="approved-prs-table" style="vertical-align:middle;margin-right:3px;">Only my comments</label>`;
+    html += renderPRTable(approvedPRs, 'approved-prs-table');
+    html += `</details>`;
+  } else {
+    html += `<h3>PRs I've Approved</h3><p class="meta">It's all good.</p>`;
+  }
+
+  if (!myPRs.length && !reviewPRs.length && !approvedPRs.length) {
+    html += `<h3>PRs Needing My Attention</h3><div style="color:#6b7280;">No open PRs needing attention.</div>`;
+  }
+
+  return html;
+}
+
+function renderPRTable(prs, tableId) {
+  let html = `<table id="${tableId}"><thead><tr>`;
+  ['PR','Title','Author','Reviewers','Checks','Created'].forEach(h => {
+    // Rows are pre-sorted by PR number ascending; reflect that in the
+    // header so it's not visually indistinguishable from an unsorted table.
+    const isSortedCol = h === 'PR';
+    // Reviewers/Checks cells hold multi-part icon+text markup with no
+    // meaningful string ordering — don't offer sort on those columns.
+    const noSort = h === 'Reviewers' || h === 'Checks';
+    const cls = [isSortedCol && 'sorted', noSort && 'no-sort'].filter(Boolean).join(' ');
+    html += `<th${cls ? ` class="${cls}"` : ''}>${h}<span class="sort-indicator">${noSort ? '' : (isSortedCol ? '▲' : '⇅')}</span><div class="resize-handle"></div></th>`;
+  });
+  html += `</tr></thead><tbody>`;
+  prs.forEach(pr => {
+    const st = (D.pr_status && D.pr_status[pr.number]) || {};
+    const reviewHtml = renderReviewers(st.reviewers);
+    const checksHtml = renderChecksBadge(st.checks || 'unknown');
+    const mergeHtml = renderMergeStatus(st.mergeable_state || '');
+    const statusHtml = mergeHtml ? checksHtml + '<br>' + mergeHtml : checksHtml;
+    const titleDisplay = (st.draft ? '[DRAFT] ' : '') + (pr.title || '');
+    const createdAge = (() => {
+      const d = pr.created || pr.updated;
+      if (!d) return '—';
+      const days = Math.floor((new Date() - new Date(d)) / 86400000);
+      if (days === 0) return 'today';
+      if (days === 1) return '1 day ago';
+      return `${days} days ago`;
+    })();
+    html += `<tr><td class="nowrap">${ghLink(pr.number)}</td><td>${esc(titleDisplay)}</td><td>${esc(pr.author)}</td><td>${reviewHtml}</td><td class="nowrap">${statusHtml}</td><td class="nowrap">${createdAge}</td></tr>`;
+    const comments = (pr.comments || []).slice().sort((a, b) => (b.when || '').localeCompare(a.when || ''));
+    if (comments.length) {
+      html += `<tr class="pr-comments"><td></td><td colspan="5">`;
+      const pageSize = 10;
+      const detailId = `comments-${tableId}-${pr.number}`;
+      const seenUpTo = getCommentSeenUpTo(pr.number);
+      const unreadCount = comments.filter(c => (c.when || '') > seenUpTo).length;
+      const unreadBadge = unreadCount > 0 ? ` <span class="unread-badge">${unreadCount} new</span>` : '';
+      html += `<details data-pr-comments="${pr.number}"><summary>Show ${comments.length} comments${unreadBadge}</summary>`;
+      html += `<table id="${detailId}" style="width:100%;table-layout:fixed;border-collapse:collapse;font-size:11px;margin:4px 0 0;"><tbody>`;
+      let lastDate = '';
+      comments.forEach((c, i) => {
+        const dateOnly = (c.when || '').slice(0, 10);
+        const showDate = dateOnly !== lastDate;
+        lastDate = dateOnly;
+        const hidden = i >= pageSize;
+        html += `<tr data-comment-user="${esc(c.who)}" style="vertical-align:top;${hidden ? 'display:none;' : ''}"${hidden ? ' data-page-hidden="1"' : ''}>`;
+        html += `<td style="width:70px;color:#6b7280;white-space:nowrap;padding:${showDate ? '6px' : '2px'} 8px 2px 0;border:none;">${showDate ? esc(dateOnly) : ''}</td>`;
+        html += `<td style="width:110px;color:#60a5fa;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:${showDate ? '6px' : '2px'} 8px 2px 0;border:none;">${esc(c.who)}</td>`;
+        html += `<td class="comment-body" style="color:#9ca3af;white-space:normal;word-wrap:break-word;overflow-wrap:break-word;padding:${showDate ? '6px' : '2px'} 0 2px 0;border:none;">${formatCommentBody(c.body)}</td>`;
+        html += `</tr>`;
+      });
+      html += `</tbody></table>`;
+      if (comments.length > pageSize) {
+        html += `<button class="load-more-comments" data-target="${detailId}" data-page-size="${pageSize}" style="margin:6px 0;background:rgba(165,180,252,0.12);border:1px solid rgba(165,180,252,0.3);color:#a5b4fc;font-size:11px;padding:3px 10px;border-radius:3px;cursor:pointer;">Load more (${comments.length - pageSize} remaining)</button>`;
+      }
+      html += `</details>`;
+      html += `</td></tr>`;
+    }
+  });
+  html += `</tbody></table>`;
+  return html;
+}
+
+function renderReviewers(reviewers) {
+  if (!reviewers || !reviewers.length) return `<span style="color:#6b7280;">—</span>`;
+  const stateMap = {
+    approved: {icon: '✓', color: '#22c55e'},
+    changes_requested: {icon: '✗', color: '#ef4444'},
+    commented: {icon: '💬', color: '#f59e0b'},
+    pending: {icon: '⏳', color: '#6b7280'},
+    dismissed: {icon: '⊘', color: '#6b7280'}
+  };
+  return reviewers.map(r => {
+    const s = stateMap[r.state] || stateMap.pending;
+    return `<span style="color:${s.color};white-space:nowrap;" title="${r.state}">${s.icon} ${esc(r.user)}</span>`;
+  }).join(' <span style="color:#374151;">│</span> ');
+}
+
+function renderChecksBadge(status) {
+  if (status === 'passing') return `<span style="color:#22c55e;">● passing</span>`;
+  if (status === 'failing') return `<span style="color:#ef4444;">● failing</span>`;
+  if (status === 'pending') return `<span style="color:#f59e0b;">● pending</span>`;
+  return `<span style="color:#6b7280;">—</span>`;
+}
+function renderMergeStatus(state) {
+  if (state === 'clean') return `<span style="color:#22c55e;" title="Ready to merge">✓ mergeable</span>`;
+  if (state === 'blocked') return `<span style="color:#f59e0b;" title="Merge blocked (branch protection rules)">⊘ blocked</span>`;
+  if (state === 'dirty') return `<span style="color:#ef4444;" title="Merge conflicts">⚠ conflicts</span>`;
+  if (state === 'unstable') return `<span style="color:#f59e0b;" title="Checks failing but mergeable">● unstable</span>`;
+  return '';
+}
+
+// ============================================================
+// LIVE GITHUB DATA — client-side fetch, replaces gather.sh/assemble.py
+// for the GitHub tab only. Triggered manually via the "Refresh Git
+// Data (Live)" button. Jira/Action Items tabs are unaffected and
+// remain driven by activity-data.js.
+// ============================================================
+
+const GH_TOKEN_KEY = 'activity_monitor_gh_token';
+const GIT_LIVE_CACHE_KEY = 'git_live_data_cache';
+const REPO = 'RedHatInsights/uhc-portal';
+
+// The Git tab never reads D.prs/D.pr_status as seeded by activity-data.js —
+// those fields are populated exclusively from a live GraphQL fetch, cached
+// here so a page reload doesn't force a re-fetch.
+function getGitLiveCache() {
+  try {
+    const raw = localStorage.getItem(GIT_LIVE_CACHE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) { return null; }
+}
+function setGitLiveCache(prsList, prStatus) {
+  localStorage.setItem(GIT_LIVE_CACHE_KEY, JSON.stringify({ prsList, prStatus, fetchedAt: new Date().toISOString() }));
+}
+
+// Bot filter — applied to both comments and reviewers. (The old Python code
+// had two different lists here by historical accident; unified into one.)
+const BOT_USERS = new Set(['codecov[bot]', 'coderabbitai[bot]', 'github-actions[bot]', 'dependabot[bot]', 'codecov', 'coderabbitai', 'sourcery-ai[bot]']);
+
+function getGithubToken() { return localStorage.getItem(GH_TOKEN_KEY) || ''; }
+function setGithubToken(t) { localStorage.setItem(GH_TOKEN_KEY, t); }
+function clearGithubToken() { localStorage.removeItem(GH_TOKEN_KEY); }
+function promptForGithubToken() {
+  const t = window.prompt('Enter a GitHub Personal Access Token (needs read access to pull requests/checks on ' + REPO + ').\nStored only in this browser\'s localStorage; sent only to api.github.com.');
+  if (t && t.trim()) { setGithubToken(t.trim()); return t.trim(); }
+  return '';
+}
+
+// Reviewer state is the raw GitHub API value — each reviewer's latest
+// PullRequestReview.state, plus "pending" for anyone requested who hasn't
+// reviewed yet. No custom overrides, no derived "ball in your court" logic.
+function simplifyReviewers(reviews, prAuthor, requestedLogins) {
+  const latestByUser = {};
+  for (const rev of reviews) {
+    if (!rev.user || rev.user === prAuthor) continue;
+    latestByUser[rev.user] = rev.state; // reviews arrive oldest-first; last write wins
+  }
+  const requestedSet = new Set(requestedLogins);
+  const reviewers = Object.entries(latestByUser).map(([user, state]) => {
+    state = state.toLowerCase();
+    // GitHub dismisses a review's own state (not just the PR's overall
+    // reviewDecision) when new commits invalidate it. If the user is back
+    // in the requested-reviewers list, that means awaiting a fresh review —
+    // show "pending" rather than the stale "dismissed" state.
+    if (state === 'dismissed' && requestedSet.has(user)) state = 'pending';
+    return { user, state };
+  });
+  const existingUsers = new Set(reviewers.map(r => r.user));
+  for (const user of requestedLogins) {
+    if (!existingUsers.has(user)) reviewers.push({ user, state: 'pending' });
+  }
+  return reviewers;
+}
+
+function mapChecksStatus(rollupState) {
+  if (!rollupState) return 'unknown';
+  if (rollupState === 'FAILURE' || rollupState === 'ERROR') return 'failing';
+  if (rollupState === 'PENDING' || rollupState === 'EXPECTED') return 'pending';
+  if (rollupState === 'SUCCESS') return 'passing';
+  return 'unknown';
+}
+
+// Full per-PR enrichment fields, requested inline inside each search() alias
+// so discovery + enrichment happens in a single GraphQL round-trip.
+const PR_FRAGMENT = `
+  number title createdAt updatedAt isDraft mergeStateStatus
+  author { login }
+  reviews(first: 50) { nodes { state author { login } submittedAt body } }
+  reviewRequests(first: 10) { nodes { requestedReviewer { __typename ... on User { login } } } }
+  comments(first: 50) { nodes { author { login } body createdAt } }
+  reviewThreads(first: 50) { nodes { isResolved comments(last: 5) { nodes { author { login } body createdAt } } } }
+  commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
+`;
+
+function buildLiveQuery(githubUser) {
+  const q = (extra) => `repo:${REPO} is:pr is:open ${extra}`;
+  const alias = (name, searchQ) => `${name}: search(query: ${JSON.stringify(q(searchQ))}, type: ISSUE, first: 30) { nodes { ... on PullRequest { ${PR_FRAGMENT} } } }`;
+  return `query {
+    ${alias('authored', 'author:' + githubUser)}
+    ${alias('requested', 'user-review-requested:' + githubUser)}
+    ${alias('stale', 'reviewed-by:' + githubUser + ' -review:approved -author:' + githubUser)}
+    ${alias('approved', 'review:approved reviewed-by:' + githubUser + ' -author:' + githubUser)}
+  }`;
+}
+
+function buildLivePrData(data, githubUser) {
+  const prMap = {};
+  const prStatus = {};
+
+  const catNodes = {
+    authored: (data.authored && data.authored.nodes) || [],
+    requested: (data.requested && data.requested.nodes) || [],
+    stale: (data.stale && data.stale.nodes) || [],
+    approved: (data.approved && data.approved.nodes) || []
+  };
+
+  // "authored" is the only category that determines pr.author identity; the
+  // other 3 searches just widen which PRs get pulled into the universe below
+  // (a PR can match more than one — dedup happens via allNodesByNumber).
+  for (const node of catNodes.authored) {
+    if (!(node.number in prMap)) {
+      prMap[node.number] = { number: node.number, title: node.title, author: githubUser, updated: (node.updatedAt || '').slice(0, 10), created: (node.createdAt || '').slice(0, 10), comments: [] };
+    }
+  }
+  for (const node of [...catNodes.requested, ...catNodes.stale, ...catNodes.approved]) {
+    if (!(node.number in prMap)) {
+      prMap[node.number] = { number: node.number, title: node.title, author: node.author ? node.author.login : '', updated: (node.updatedAt || '').slice(0, 10), created: (node.createdAt || '').slice(0, 10), comments: [] };
+    }
+  }
+
+  // Dedup nodes across categories (a PR can match multiple searches) for enrichment
+  const allNodesByNumber = {};
+  for (const arr of Object.values(catNodes)) {
+    for (const node of arr) {
+      if (!(node.number in allNodesByNumber)) allNodesByNumber[node.number] = node;
+    }
+  }
+
+  for (const node of Object.values(allNodesByNumber)) {
+    const num = node.number;
+    const prAuthorLogin = node.author ? node.author.login : '';
+
+    const reviews = (node.reviews.nodes || []).map(r => ({ state: r.state, user: r.author ? r.author.login : '', submittedAt: r.submittedAt }));
+    const requestedLogins = (node.reviewRequests.nodes || []).map(rr => rr.requestedReviewer && rr.requestedReviewer.login).filter(Boolean);
+    const issueComments = (node.comments.nodes || []).map(c => ({ user: c.author ? c.author.login : '', body: (c.body || '').slice(0, 1500), when: c.createdAt }));
+
+    const reviewers = simplifyReviewers(reviews, prAuthorLogin, requestedLogins);
+    const filteredReviewers = reviewers.filter(r => !BOT_USERS.has(r.user));
+
+    const checksState = node.commits && node.commits.nodes && node.commits.nodes[0] && node.commits.nodes[0].commit && node.commits.nodes[0].commit.statusCheckRollup
+      ? node.commits.nodes[0].commit.statusCheckRollup.state : null;
+
+    prStatus[String(num)] = {
+      reviewers: filteredReviewers,
+      checks: mapChecksStatus(checksState),
+      mergeable_state: (node.mergeStateStatus || '').toLowerCase(),
+      draft: !!node.isDraft
+    };
+
+    // Merge comments: issue comments + all review-thread comments + non-empty review bodies
+    let allComments = issueComments.slice();
+    for (const thread of (node.reviewThreads.nodes || [])) {
+      for (const c of (thread.comments.nodes || [])) {
+        allComments.push({ user: c.author ? c.author.login : '', body: (c.body || '').slice(0, 1500), when: c.createdAt });
+      }
+    }
+    for (const r of (node.reviews.nodes || [])) {
+      if (r.body) {
+        const rUser = r.author ? r.author.login : '';
+        if (BOT_USERS.has(rUser)) continue;
+        let prefix = '';
+        if (r.state === 'CHANGES_REQUESTED') prefix = '[Changes Requested] ';
+        else if (r.state === 'APPROVED') prefix = '[Approved] ';
+        allComments.push({ user: rUser, body: prefix + (r.body || '').slice(0, 800), when: r.submittedAt || '' });
+      }
+    }
+    allComments = allComments.filter(c => !BOT_USERS.has(c.user));
+    allComments.sort((a, b) => (a.when || '').localeCompare(b.when || ''));
+    allComments = allComments.slice(-30);
+
+    if (num in prMap) {
+      prMap[num].comments = allComments
+        .map(c => ({ who: c.user, when: c.when, body: c.body }))
+        .sort((a, b) => (b.when || '').localeCompare(a.when || ''));
+    }
+  }
+
+  // No sort here — renderPRs() always re-sorts by PR number per section.
+  const prsList = Object.values(prMap);
+
+  return { prsList, prStatus };
+}
+
+async function fetchLiveGitData(token) {
+  const githubUser = D.meta.github_user;
+  const query = buildLiveQuery(githubUser);
+  const resp = await fetch('https://api.github.com/graphql', {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query })
+  });
+  if (resp.status === 401) { const e = new Error('Unauthorized'); e.authError = true; throw e; }
+  const json = await resp.json();
+  if (json.errors && json.errors.length) {
+    const msg = json.errors.map(e => e.message).join('; ');
+    if (/bad credentials|unauthorized/i.test(msg)) { const e = new Error(msg); e.authError = true; throw e; }
+    throw new Error(msg);
+  }
+  return buildLivePrData(json.data, githubUser);
+}
+
+function renderGitLiveControls() {
+  const token = getGithubToken();
+  const tokenLabel = token ? 'Change Token' : 'Set Token';
+  const cached = getGitLiveCache();
+  const initialStatus = cached && cached.fetchedAt
+    ? `Last fetched: ${new Date(cached.fetchedAt).toLocaleString()} (cached)`
+    : 'Not yet fetched — click Refresh';
+  return `<div id="git-live-controls" style="margin:8px 0 4px 0;">
+    <button id="git-live-refresh-btn" class="git-live-btn">🔄 Refresh Git Data (Live)</button>
+    <button id="git-live-token-btn" class="git-live-btn">🔑 ${tokenLabel}</button>
+    <span id="git-live-status" style="margin-left:4px;font-size:12px;color:#6b7280;">${initialStatus}</span>
+  </div>`;
+}
+
+function renderGitEmptyState() {
+  return `<div style="color:#6b7280;padding:24px 4px;">
+    <p>No live GitHub data loaded yet — this tab is fetched directly from the GitHub API.</p>
+    <p style="font-size:12px;margin-top:6px;">Click <strong style="color:#a5b4fc;">"🔄 Refresh Git Data (Live)"</strong> above to load your PRs.</p>
+  </div>`;
+}
+
+// Entry point for the GitHub tab's content — hydrates from the localStorage
+// cache of the last live fetch if present, otherwise shows an empty state.
+// Deliberately never touches D.prs/D.pr_status as seeded by activity-data.js.
+function renderGitTabContent() {
+  const cached = getGitLiveCache();
+  if (cached) {
+    D.prs = cached.prsList;
+    D.pr_status = cached.prStatus;
+    return renderPRs();
+  }
+  return renderGitEmptyState();
+}
+
+async function handleGitLiveRefresh() {
+  const statusEl = document.getElementById('git-live-status');
+  let token = getGithubToken();
+  if (!token) {
+    token = promptForGithubToken();
+    if (!token) return;
+  }
+  statusEl.textContent = 'Fetching live data…';
+  statusEl.style.color = '#f59e0b';
+  try {
+    const { prsList, prStatus } = await fetchLiveGitData(token);
+    D.prs = prsList;
+    D.pr_status = prStatus;
+    setGitLiveCache(prsList, prStatus);
+    document.getElementById('git-live-content').innerHTML = renderPRs();
+    initInteractions(document.getElementById('git-live-content'));
+    statusEl.textContent = `Live data fetched at ${new Date().toLocaleTimeString()}`;
+    statusEl.style.color = '#22c55e';
+  } catch (err) {
+    if (err && err.authError) {
+      clearGithubToken();
+      const tokenBtn = document.getElementById('git-live-token-btn');
+      if (tokenBtn) tokenBtn.textContent = '🔑 Set Token';
+      statusEl.textContent = 'Token invalid/expired — click "Set Token" and try again.';
+    } else {
+      statusEl.textContent = 'Error: ' + (err && err.message ? err.message : 'fetch failed');
+    }
+    statusEl.style.color = '#ef4444';
+    console.error('[git-live] fetch failed', err);
+  }
+}
+
+function renderPage() {
+  let html = `<div style="display:flex;justify-content:space-between;align-items:baseline;">
+    <h1>Git Activity</h1>
+    <a href="ACTIVITY_MONITOR.html" style="color:#60a5fa;font-size:13px;">Activity Monitor →</a>
+  </div>`;
+  html += renderGitLiveControls();
+  html += `<div id="git-live-content">`;
+  html += renderGitTabContent();
+  html += `</div>`;
+
+  document.getElementById('app').innerHTML = html;
+  pruneLocalStorage();
+  initInteractions();
+}
+
+function pruneLocalStorage() {
+  // Prune unread-comment bookmarks for PRs no longer in the data (closed/merged)
+  const prNumKeys = new Set((D.prs || []).map(p => String(p.number)));
+  const seenMap = getCommentsSeenMap();
+  let seenChanged = false;
+  for (const k of Object.keys(seenMap)) {
+    if (!prNumKeys.has(k)) { delete seenMap[k]; seenChanged = true; }
+  }
+  if (seenChanged) localStorage.setItem(COMMENTS_SEEN_KEY, JSON.stringify(seenMap));
+}
+
+function initInteractions(root) {
+  root = root || document;
+
+  // Git live-fetch controls — bind once; these elements are never
+  // recreated on a live refresh (only #git-live-content is replaced).
+  const gitRefreshBtn = document.getElementById('git-live-refresh-btn');
+  if (gitRefreshBtn && !gitRefreshBtn.dataset.bound) {
+    gitRefreshBtn.dataset.bound = '1';
+    gitRefreshBtn.addEventListener('click', handleGitLiveRefresh);
+  }
+  const gitTokenBtn = document.getElementById('git-live-token-btn');
+  if (gitTokenBtn && !gitTokenBtn.dataset.bound) {
+    gitTokenBtn.dataset.bound = '1';
+    gitTokenBtn.addEventListener('click', () => {
+      promptForGithubToken();
+      gitTokenBtn.textContent = '🔑 ' + (getGithubToken() ? 'Change Token' : 'Set Token');
+    });
+  }
+
+  // "Only my comments" filter checkboxes (per section, applies to all PRs in table)
+  root.querySelectorAll('.my-comments-filter').forEach(cb => {
+    cb.addEventListener('change', () => {
+      const tableId = cb.getAttribute('data-table');
+      const table = document.getElementById(tableId);
+      if (!table) return;
+      const myUser = D.meta.github_user;
+      const filtered = cb.checked;
+      // Process each PR's comment table
+      table.querySelectorAll('tr.pr-comments').forEach(commentRow => {
+        const innerTable = commentRow.querySelector('table[id]');
+        if (!innerTable) return;
+        const rows = innerTable.querySelectorAll('tr[data-comment-user]');
+        let anyVisible = false;
+        rows.forEach(r => {
+          const isPageHidden = r.hasAttribute('data-page-hidden');
+          if (filtered) {
+            const isMine = r.getAttribute('data-comment-user') === myUser;
+            r.style.display = isMine ? '' : 'none';
+            if (isMine) anyVisible = true;
+          } else {
+            r.style.display = isPageHidden ? 'none' : '';
+            if (!isPageHidden) anyVisible = true;
+          }
+        });
+        // Show/hide "no comments" message
+        let noMsg = innerTable.parentElement.querySelector('.no-my-comments');
+        if (filtered && !anyVisible) {
+          if (!noMsg) {
+            noMsg = document.createElement('div');
+            noMsg.className = 'no-my-comments';
+            noMsg.style.cssText = 'color:#6b7280;font-size:11px;font-style:italic;padding:4px 0;';
+            noMsg.textContent = 'No comments from you on this PR.';
+            innerTable.parentElement.insertBefore(noMsg, innerTable.nextSibling);
+          }
+          noMsg.style.display = '';
+        } else if (noMsg) {
+          noMsg.style.display = 'none';
+        }
+        // Hide/show load more button when filtered
+        const loadBtn = innerTable.parentElement.querySelector('.load-more-comments');
+        if (loadBtn) loadBtn.style.display = filtered ? 'none' : '';
+      });
+    });
+  });
+
+  // Load more comments pagination
+  root.querySelectorAll('.load-more-comments').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const table = document.getElementById(btn.getAttribute('data-target'));
+      if (!table) return;
+      const pageSize = parseInt(btn.getAttribute('data-page-size'));
+      const hiddenRows = Array.from(table.querySelectorAll('tr[data-page-hidden="1"]'));
+      const toShow = hiddenRows.slice(0, pageSize);
+      toShow.forEach(r => { r.style.display = ''; r.removeAttribute('data-page-hidden'); });
+      const remaining = hiddenRows.length - toShow.length;
+      if (remaining > 0) {
+        btn.textContent = `Load more (${remaining} remaining)`;
+      } else {
+        btn.remove();
+      }
+    });
+  });
+
+  // Unread comment tracking — mark seen (and drop the badge) when a PR's
+  // comment thread is expanded, either individually or via bulk Expand.
+  root.querySelectorAll('details[data-pr-comments]').forEach(details => {
+    if (details.dataset.unreadBound) return;
+    details.dataset.unreadBound = '1';
+    details.addEventListener('toggle', () => {
+      if (!details.open) return;
+      const prNum = details.getAttribute('data-pr-comments');
+      const pr = (D.prs || []).find(p => String(p.number) === prNum);
+      if (!pr || !pr.comments || !pr.comments.length) return;
+      const maxWhen = pr.comments.reduce((max, c) => (c.when || '') > max ? (c.when || '') : max, '');
+      markCommentsSeen(prNum, maxWhen);
+      const badge = details.querySelector('.unread-badge');
+      if (badge) badge.remove();
+    });
+  });
+
+  // PR comments expand/collapse buttons — toggles <details> open state
+  root.querySelectorAll('.pr-comments-toggle').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const tableId = btn.getAttribute('data-table');
+      const table = document.getElementById(tableId);
+      if (!table) return;
+      const details = table.querySelectorAll('tr.pr-comments details');
+      const anyOpen = Array.from(details).some(d => d.open);
+      details.forEach(d => d.open = !anyOpen);
+      btn.textContent = anyOpen ? 'Expand Comments' : 'Collapse Comments';
+    });
+  });
+
+  // Draft PRs show/hide button
+  root.querySelectorAll('.draft-toggle').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const tableId = btn.getAttribute('data-draft-table');
+      const wrap = document.getElementById(tableId + '-wrap');
+      if (!wrap) return;
+      const visible = wrap.style.display !== 'none';
+      wrap.style.display = visible ? 'none' : '';
+      btn.textContent = visible ? btn.textContent.replace('Hide', 'Show') : btn.textContent.replace('Show', 'Hide');
+    });
+  });
+
+  // Table sorting. Guard against markdown tables now renderable inside
+  // comment bodies (via marked.js) — those are plain <th> with no
+  // .sort-indicator span, so wiring sortTable() to them would throw.
+  root.querySelectorAll('table').forEach(table => {
+    const state = { col: -1, asc: true };
+    table.querySelectorAll('th').forEach((th, idx) => {
+      if (!th.querySelector('.sort-indicator')) return;
+      th.addEventListener('click', e => {
+        if (e.target.classList.contains('resize-handle')) return;
+        if (th.classList.contains('no-sort')) return;
+        if (state.col === idx) state.asc = !state.asc;
+        else { state.col = idx; state.asc = true; }
+        sortTable(table, idx, state.asc);
+      });
+    });
+  });
+
+  // Resizable columns
+  root.querySelectorAll('.resize-handle').forEach(handle => {
+    handle.addEventListener('mousedown', e => {
+      const th = handle.parentElement;
+      const startX = e.pageX, startWidth = th.offsetWidth;
+      handle.classList.add('active');
+      const onMove = ev => { th.style.width = (startWidth + ev.pageX - startX) + 'px'; th.style.minWidth = th.style.width; };
+      const onUp = () => { handle.classList.remove('active'); document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); };
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+      e.preventDefault();
+    });
+  });
+
+}
+
+function sortTable(table, colIdx, asc) {
+  const headers = table.querySelectorAll('th');
+  // Skip no-sort headers (Reviewers/Checks) — otherwise every sort click
+  // clobbers their intentionally-blank indicator back to a visible '⇅'.
+  headers.forEach(h => {
+    if (h.classList.contains('no-sort')) return;
+    h.classList.remove('sorted');
+    h.querySelector('.sort-indicator').textContent = '⇅';
+  });
+  headers[colIdx].classList.add('sorted');
+  headers[colIdx].querySelector('.sort-indicator').textContent = asc ? '▲' : '▼';
+  const tbody = table.querySelector('tbody');
+  // :scope > tr restricts the match to direct children of tbody. Plain
+  // 'tr:not(.pr-comments)' matches ANY descendant <tr>, including the
+  // individual comment rows nested inside each PR's collapsed per-comment
+  // sub-table — sweeping those into the sort and appendChild() then rips
+  // them out of their nested table into the outer tbody, corrupting it.
+  const rows = Array.from(tbody.querySelectorAll(':scope > tr:not(.pr-comments)'));
+  // Capture each row's comment sibling before any DOM moves — appendChild()
+  // relocates an already-attached node immediately, so reading
+  // nextElementSibling *after* moving a row always returns null.
+  const commentRowFor = new Map();
+  rows.forEach(row => {
+    const nx = row.nextElementSibling;
+    if (nx && nx.classList.contains('pr-comments')) commentRowFor.set(row, nx);
+  });
+  rows.sort((a, b) => {
+    let aV = a.cells[colIdx].textContent.trim(), bV = b.cells[colIdx].textContent.trim();
+    if (aV === '—' || aV === '') aV = 'zzz';
+    if (bV === '—' || bV === '') bV = 'zzz';
+    return asc ? aV.localeCompare(bV) : bV.localeCompare(aV);
+  });
+  rows.forEach(row => {
+    tbody.appendChild(row);
+    const commentRow = commentRowFor.get(row);
+    if (commentRow) tbody.appendChild(commentRow);
+  });
+}
+
+
+</script>
+</body>
+</html>

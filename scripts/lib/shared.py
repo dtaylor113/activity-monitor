@@ -50,29 +50,36 @@ def adf_to_text(node, max_len=500):
 # ── Review State Machine ────────────────────────────────────────────────────
 
 def resolve_reviewers(pr_num, repo, github_user, requested=None):
-    """Build reviewer list for a PR with correct state transitions.
+    """Build reviewer list for a PR using raw GitHub review states.
 
-    Fetches reviews via gh API, applies state machine:
-    - APPROVED / CHANGES_REQUESTED set directly
-    - COMMENTED upgrades CHANGES_REQUESTED to show engagement
-    - DISMISSED downgrades to COMMENTED
-    - Re-requested reviewers reset to pending
-    - Issue commenters upgrade from pending to commented
+    Each reviewer's state is their single latest PullRequestReview.state
+    (lowercased), taken as-is from the API — no derived "ball in your
+    court" transitions (no COMMENTED-upgrades-CHANGES_REQUESTED, no
+    DISMISSED-downgrades-to-COMMENTED, no issue-comment-inferred
+    pending→commented). The one adjustment: GitHub dismisses a review's
+    own state (not just the PR's overall decision) when new commits
+    invalidate it; if that user is back in the requested-reviewers list,
+    that means awaiting a fresh review, so it's shown as 'pending' rather
+    than the stale 'dismissed' state. Anyone requested who hasn't
+    reviewed at all yet is also 'pending'.
+
+    Mirrors simplifyReviewers() in GITHUB_ACTIVITY.html — keep both in
+    sync if this logic changes.
 
     Args:
         pr_num: PR number
         repo: owner/repo string
-        github_user: current user's GitHub login
+        github_user: current user's GitHub login (excluded — self-review
+            doesn't count)
         requested: list of individually-requested reviewer logins
 
     Returns:
-        (reviewers, my_last_review_at) where reviewers is list of
-        {'user': str, 'state': str} dicts and my_last_review_at is ISO timestamp.
+        List of {'user': str, 'state': str} dicts.
     """
     if requested is None:
         requested = []
 
-    # Fetch PR author
+    # Fetch PR author (excluded from reviewers)
     pr_author = ''
     try:
         r = subprocess.run(
@@ -84,73 +91,44 @@ def resolve_reviewers(pr_num, repo, github_user, requested=None):
     except Exception:
         pass
 
-    # Paginate all reviews
-    reviewers = []
-    my_last_review_at = ''
+    # Paginate all reviews, keep each user's latest raw state (the API
+    # returns reviews oldest-first, so last write wins).
+    latest_state = {}
     try:
         r = subprocess.run(
             ['gh', 'api', '--paginate', f'repos/{repo}/pulls/{pr_num}/reviews',
-             '--jq', '[.[] | {state: .state, user: .user.login, submitted_at: .submitted_at}]'],
+             '--jq', '[.[] | {state: .state, user: .user.login}]'],
             capture_output=True, text=True, timeout=30)
         if r.returncode == 0 and r.stdout.strip():
-            reviews = []
             for chunk in r.stdout.strip().split('\n'):
                 chunk = chunk.strip()
-                if chunk:
-                    try:
-                        reviews.extend(json.loads(chunk))
-                    except Exception:
-                        pass
-            reviewer_state = {}
-            for rev in reviews:
-                user = rev['user']
-                if user == pr_author:
+                if not chunk:
                     continue
-                state = rev['state']
-                if state in ('APPROVED', 'CHANGES_REQUESTED'):
-                    reviewer_state[user] = state
-                elif state == 'COMMENTED':
-                    if user not in reviewer_state or reviewer_state[user] in ('COMMENTED', 'CHANGES_REQUESTED'):
-                        reviewer_state[user] = 'COMMENTED'
-                elif state == 'DISMISSED':
-                    reviewer_state[user] = 'COMMENTED'
-                if user == github_user and rev.get('submitted_at'):
-                    my_last_review_at = rev['submitted_at']
-            for user, state in reviewer_state.items():
-                reviewers.append({'user': user, 'state': state.lower()})
+                try:
+                    for rev in json.loads(chunk):
+                        if rev['user'] == pr_author:
+                            continue
+                        latest_state[rev['user']] = rev['state']
+                except Exception:
+                    pass
     except Exception:
         pass
 
-    # Add requested reviewers; reset to pending if re-requested
-    re_requested = set()
+    requested_set = set(requested)
+    reviewers = []
+    for user, state in latest_state.items():
+        state = state.lower()
+        if state == 'dismissed' and user in requested_set:
+            state = 'pending'
+        reviewers.append({'user': user, 'state': state})
+
     existing_users = {rv['user'] for rv in reviewers}
     for user in requested:
         if user not in existing_users:
             reviewers.append({'user': user, 'state': 'pending'})
             existing_users.add(user)
-        else:
-            for rv in reviewers:
-                if rv['user'] == user:
-                    rv['state'] = 'pending'
-                    break
-        re_requested.add(user)
 
-    # Upgrade pending → commented if they left issue comments
-    # (skip re-requested reviewers — re-request is a stronger signal)
-    try:
-        r = subprocess.run(
-            ['gh', 'api', f'repos/{repo}/issues/{pr_num}/comments',
-             '--jq', '[.[].user.login]'],
-            capture_output=True, text=True, timeout=15)
-        if r.returncode == 0 and r.stdout.strip():
-            issue_commenters = set(json.loads(r.stdout))
-            for rv in reviewers:
-                if rv['state'] == 'pending' and rv['user'] in issue_commenters and rv['user'] not in re_requested:
-                    rv['state'] = 'commented'
-    except Exception:
-        pass
-
-    return reviewers, my_last_review_at
+    return reviewers
 
 
 def get_checks_status(pr_num, repo):
