@@ -6,6 +6,10 @@
 <title>Git Activity</title>
 <!-- GFM rendering for comment bodies (tables, fenced code, lists, etc.) -->
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<!-- Sanitizes marked.js output before it hits innerHTML — comment bodies
+     are untrusted (anyone who can comment on a tracked PR), and marked.js
+     itself does not sanitize raw HTML embedded in markdown source. -->
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body {
@@ -47,6 +51,11 @@ tr.pr-comments td { background: #0d0d1a; border-top: none; padding: 3px 10px 6px
 .pr-comments-toggle:hover { background: rgba(165, 180, 252, 0.2); }
 .draft-toggle { background: rgba(165, 180, 252, 0.12); border: 1px solid rgba(165, 180, 252, 0.3); color: #a5b4fc; font-size: 11px; padding: 3px 10px; border-radius: 3px; cursor: pointer; margin-left: 6px; vertical-align: middle; }
 .draft-toggle:hover { background: rgba(165, 180, 252, 0.2); }
+/* Draft PRs hidden by default; "Show Draft PRs" removes .hide-drafts from
+   the table. The adjacent-sibling selector hides a draft row's comment
+   sub-row too, without needing to tag that row separately. */
+table.hide-drafts tr.pr-draft-row,
+table.hide-drafts tr.pr-draft-row + tr.pr-comments { display: none; }
 
 .git-live-btn { background: rgba(165, 180, 252, 0.12); border: 1px solid rgba(165, 180, 252, 0.3); color: #a5b4fc; font-size: 12px; padding: 4px 12px; border-radius: 3px; cursor: pointer; margin-right: 6px; }
 .git-live-btn:hover { background: rgba(165, 180, 252, 0.2); }
@@ -88,13 +97,49 @@ const GH = 'https://github.com/RedHatInsights/uhc-portal/pull/';
 function ghLink(n) { return `<a href="${GH}${n}">#${n}</a>`; }
 function esc(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
+// Shared relative-age formatter — used for both the PR "Created" column and
+// the comments-summary "latest from" line, so the two stay consistent.
+// Same calendar day -> hours ago; exactly one calendar day back ->
+// "Yesterday"; older -> "N days ago". Calendar-day (not raw ms/24h) based,
+// so 11:58pm-yesterday vs 12:02am-today correctly reads "Yesterday" rather
+// than "0 days ago".
+function formatRelativeAge(dateStr) {
+  if (!dateStr) return '—';
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return '—';
+  const now = new Date();
+  const startOfDay = x => new Date(x.getFullYear(), x.getMonth(), x.getDate());
+  const dayDiff = Math.round((startOfDay(now) - startOfDay(d)) / 86400000);
+  if (dayDiff <= 0) {
+    const hours = Math.floor((now - d) / 3600000);
+    if (hours <= 0) return 'just now';
+    if (hours === 1) return '1 hour ago';
+    return `${hours} hours ago`;
+  }
+  if (dayDiff === 1) return 'Yesterday';
+  return `${dayDiff} days ago`;
+}
+
+// Shared by the initial render and the "Only my comments" filter handler —
+// "latest" is always whatever the first (newest) *currently visible* comment
+// is, so checking that filter naturally turns this into "latest from me"
+// with no separate code path.
+function formatCommentsSummary(shownCount, total, latestWho, latestWhen) {
+  const countText = shownCount === total ? `${total} comments` : `${shownCount} of ${total} comments`;
+  if (!latestWho) return countText;
+  return `${countText} · latest from ${esc(latestWho)} ${formatRelativeAge(latestWhen)}`;
+}
+
 if (window.marked) marked.setOptions({ gfm: true, breaks: true });
 
 // Renders a raw GitHub comment body as full GitHub-Flavored Markdown (code
 // fences, inline code, tables, lists, blockquotes, links, bold/italic) via
 // marked.js. Embedded <img> HTML tags (GitHub's pasted-screenshot markup)
 // are pulled out first and re-inserted as sized thumbnail links afterward,
-// since marked would otherwise pass the raw tag through unstyled.
+// since marked would otherwise pass the raw tag through unstyled. The final
+// output is run through DOMPurify — comment bodies are untrusted content
+// (anyone who can comment on a tracked PR controls this string), and
+// marked.js has no built-in HTML sanitization of its own.
 function formatCommentBody(text) {
   if (!text) return '';
   const imgMap = {};
@@ -117,6 +162,7 @@ function formatCommentBody(text) {
   for (const token of Object.keys(imgMap)) {
     html = html.split(token).join(imgMap[token]);
   }
+  if (window.DOMPurify) html = DOMPurify.sanitize(html);
   return html;
 }
 
@@ -139,84 +185,46 @@ function markCommentsSeen(prNumber, upToWhen) {
 function renderPRs() {
   const myUser = D.meta.github_user;
   const byPrNumberAsc = (a, b) => a.number - b.number;
-  const myPRs = D.prs.filter(pr => pr.author === myUser).sort(byPrNumberAsc);
 
-  const reviewPRs = [];
-  const approvedPRs = [];
-
-  D.prs.forEach(pr => {
-    if (pr.author === myUser) return;
+  const myPRs = D.prs.filter(pr => pr.author === myUser);
+  const otherRelevant = D.prs.filter(pr => {
+    if (pr.author === myUser) return false;
     const st = D.pr_status && D.pr_status[pr.number];
-    if (!st || !st.reviewers) return;
-    const myReview = st.reviewers.find(r => r.user === myUser);
-    if (!myReview) return;
-
-    if (myReview.state === 'approved') {
-      approvedPRs.push(pr);
-      return;
-    }
-
-    reviewPRs.push(pr);
+    return !!(st && st.reviewers && st.reviewers.some(r => r.user === myUser));
   });
+  const allPRs = myPRs.concat(otherRelevant).sort(byPrNumberAsc);
 
-  // All tables default-sort by PR number, oldest first (matches the PR
-  // column header's initial state; click any header to re-sort).
-  reviewPRs.sort(byPrNumberAsc);
-  approvedPRs.sort(byPrNumberAsc);
-
-  let html = '';
-
-  if (myPRs.length) {
-    const nonDraftPRs = myPRs.filter(pr => {
-      const st = D.pr_status && D.pr_status[pr.number];
-      return !st || !st.draft;
-    });
-    const draftPRs = myPRs.filter(pr => {
-      const st = D.pr_status && D.pr_status[pr.number];
-      return st && st.draft;
-    });
-    html += `<h3>My PRs <button class="pr-comments-toggle" data-table="my-prs-table">Expand Comments</button>`;
-    if (draftPRs.length) {
-      html += ` <button class="draft-toggle" data-draft-table="my-draft-prs-table">Show Draft PRs (${draftPRs.length})</button>`;
-    }
-    html += ` <label style="font-weight:normal;font-size:12px;cursor:pointer;margin-left:6px;"><input type="checkbox" class="my-comments-filter" data-table="my-prs-table" style="vertical-align:middle;margin-right:3px;">Only my comments</label></h3>`;
-    html += renderPRTable(nonDraftPRs, 'my-prs-table');
-    if (draftPRs.length) {
-      html += `<div id="my-draft-prs-table-wrap" style="display:none;">`;
-      html += renderPRTable(draftPRs, 'my-draft-prs-table');
-      html += `</div>`;
-    }
+  if (!allPRs.length) {
+    return `<h3>PRs Needing My Attention</h3><div style="color:#6b7280;">No open PRs needing attention.</div>`;
   }
 
-  if (reviewPRs.length) {
-    html += `<h3>PRs I'm Reviewing <button class="pr-comments-toggle" data-table="reviewing-prs-table">Expand Comments</button> <label style="font-weight:normal;font-size:12px;cursor:pointer;margin-left:6px;"><input type="checkbox" class="my-comments-filter" data-table="reviewing-prs-table" style="vertical-align:middle;margin-right:3px;">Only my comments</label></h3>`;
-    html += renderPRTable(reviewPRs, 'reviewing-prs-table');
-  }
+  const draftCount = allPRs.reduce((n, pr) => {
+    const st = D.pr_status && D.pr_status[pr.number];
+    return n + (st && st.draft ? 1 : 0);
+  }, 0);
 
-  if (approvedPRs.length) {
-    html += `<details><summary style="cursor:pointer;"><h3 style="display:inline;">PRs I've Approved (${approvedPRs.length})</h3></summary>`;
-    html += `<button class="pr-comments-toggle" data-table="approved-prs-table" style="margin:8px 0;">Expand Comments</button> <label style="font-weight:normal;font-size:12px;cursor:pointer;margin-left:6px;"><input type="checkbox" class="my-comments-filter" data-table="approved-prs-table" style="vertical-align:middle;margin-right:3px;">Only my comments</label>`;
-    html += renderPRTable(approvedPRs, 'approved-prs-table');
-    html += `</details>`;
-  } else {
-    html += `<h3>PRs I've Approved</h3><p class="meta">It's all good.</p>`;
+  let html = `<h3>PRs <button class="pr-comments-toggle" data-table="prs-table">Expand All Comments</button>`;
+  if (draftCount) {
+    html += ` <button class="draft-toggle" data-draft-table="prs-table">Show Draft PRs (${draftCount})</button>`;
   }
-
-  if (!myPRs.length && !reviewPRs.length && !approvedPRs.length) {
-    html += `<h3>PRs Needing My Attention</h3><div style="color:#6b7280;">No open PRs needing attention.</div>`;
-  }
+  html += ` <label style="font-weight:normal;font-size:12px;cursor:pointer;margin-left:6px;"><input type="checkbox" class="my-comments-filter" data-table="prs-table" style="vertical-align:middle;margin-right:3px;">Only my comments</label></h3>`;
+  html += renderPRTable(allPRs, 'prs-table', myUser);
 
   return html;
 }
 
-function renderPRTable(prs, tableId) {
-  let html = `<table id="${tableId}"><thead><tr>`;
+function renderPRTable(prs, tableId, myUser) {
+  // .hide-drafts is present by default — CSS (see <style>) hides any row
+  // (and its comment sub-row) carrying .pr-draft-row until the "Show Draft
+  // PRs" button removes this class. A single table with hidden rows (vs.
+  // a second physical table) means sorting always covers draft rows too.
+  let html = `<table id="${tableId}" class="hide-drafts"><thead><tr>`;
   ['PR','Title','Author','Reviewers','Checks','Created'].forEach(h => {
     // Rows are pre-sorted by PR number ascending; reflect that in the
     // header so it's not visually indistinguishable from an unsorted table.
     const isSortedCol = h === 'PR';
-    // Reviewers/Checks cells hold multi-part icon+text markup with no
-    // meaningful string ordering — don't offer sort on those columns.
+    // Reviewers/Checks cells hold badge/icon markup with no meaningful
+    // string ordering — don't offer sort on those columns.
     const noSort = h === 'Reviewers' || h === 'Checks';
     const cls = [isSortedCol && 'sorted', noSort && 'no-sort'].filter(Boolean).join(' ');
     html += `<th${cls ? ` class="${cls}"` : ''}>${h}<span class="sort-indicator">${noSort ? '' : (isSortedCol ? '▲' : '⇅')}</span><div class="resize-handle"></div></th>`;
@@ -224,20 +232,16 @@ function renderPRTable(prs, tableId) {
   html += `</tr></thead><tbody>`;
   prs.forEach(pr => {
     const st = (D.pr_status && D.pr_status[pr.number]) || {};
+    const authorHtml = pr.author === myUser
+      ? `<span style="color:#22c55e;">${esc(pr.author)}</span>`
+      : esc(pr.author);
     const reviewHtml = renderReviewers(st.reviewers);
     const checksHtml = renderChecksBadge(st.checks || 'unknown');
     const mergeHtml = renderMergeStatus(st.mergeable_state || '');
     const statusHtml = mergeHtml ? checksHtml + '<br>' + mergeHtml : checksHtml;
     const titleDisplay = (st.draft ? '[DRAFT] ' : '') + (pr.title || '');
-    const createdAge = (() => {
-      const d = pr.created || pr.updated;
-      if (!d) return '—';
-      const days = Math.floor((new Date() - new Date(d)) / 86400000);
-      if (days === 0) return 'today';
-      if (days === 1) return '1 day ago';
-      return `${days} days ago`;
-    })();
-    html += `<tr><td class="nowrap">${ghLink(pr.number)}</td><td>${esc(titleDisplay)}</td><td>${esc(pr.author)}</td><td>${reviewHtml}</td><td class="nowrap">${statusHtml}</td><td class="nowrap">${createdAge}</td></tr>`;
+    const createdAge = formatRelativeAge(pr.created || pr.updated);
+    html += `<tr${st.draft ? ' class="pr-draft-row"' : ''}><td class="nowrap">${ghLink(pr.number)}</td><td>${esc(titleDisplay)}</td><td>${authorHtml}</td><td>${reviewHtml}</td><td class="nowrap">${statusHtml}</td><td class="nowrap">${createdAge}</td></tr>`;
     const comments = (pr.comments || []).slice().sort((a, b) => (b.when || '').localeCompare(a.when || ''));
     if (comments.length) {
       html += `<tr class="pr-comments"><td></td><td colspan="5">`;
@@ -246,7 +250,10 @@ function renderPRTable(prs, tableId) {
       const seenUpTo = getCommentSeenUpTo(pr.number);
       const unreadCount = comments.filter(c => (c.when || '') > seenUpTo).length;
       const unreadBadge = unreadCount > 0 ? ` <span class="unread-badge">${unreadCount} new</span>` : '';
-      html += `<details data-pr-comments="${pr.number}"><summary>Show ${comments.length} comments${unreadBadge}</summary>`;
+      // comments[0] is the newest (sorted above) — same "latest of what's
+      // currently visible" concept the filter handler recomputes below.
+      const summaryText = formatCommentsSummary(comments.length, comments.length, comments[0].who, comments[0].when);
+      html += `<details data-pr-comments="${pr.number}"><summary><span class="comments-count-label" data-total="${comments.length}">${summaryText}</span>${unreadBadge}</summary>`;
       html += `<table id="${detailId}" style="width:100%;table-layout:fixed;border-collapse:collapse;font-size:11px;margin:4px 0 0;"><tbody>`;
       let lastDate = '';
       comments.forEach((c, i) => {
@@ -254,8 +261,8 @@ function renderPRTable(prs, tableId) {
         const showDate = dateOnly !== lastDate;
         lastDate = dateOnly;
         const hidden = i >= pageSize;
-        html += `<tr data-comment-user="${esc(c.who)}" style="vertical-align:top;${hidden ? 'display:none;' : ''}"${hidden ? ' data-page-hidden="1"' : ''}>`;
-        html += `<td style="width:70px;color:#6b7280;white-space:nowrap;padding:${showDate ? '6px' : '2px'} 8px 2px 0;border:none;">${showDate ? esc(dateOnly) : ''}</td>`;
+        html += `<tr data-comment-user="${esc(c.who)}" data-date="${esc(dateOnly)}" data-when="${esc(c.when || '')}" style="vertical-align:top;${hidden ? 'display:none;' : ''}"${hidden ? ' data-page-hidden="1"' : ''}>`;
+        html += `<td class="comment-date-cell" style="width:70px;color:#6b7280;white-space:nowrap;padding:${showDate ? '6px' : '2px'} 8px 2px 0;border:none;">${showDate ? esc(dateOnly) : ''}</td>`;
         html += `<td style="width:110px;color:#60a5fa;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:${showDate ? '6px' : '2px'} 8px 2px 0;border:none;">${esc(c.who)}</td>`;
         html += `<td class="comment-body" style="color:#9ca3af;white-space:normal;word-wrap:break-word;overflow-wrap:break-word;padding:${showDate ? '6px' : '2px'} 0 2px 0;border:none;">${formatCommentBody(c.body)}</td>`;
         html += `</tr>`;
@@ -329,11 +336,15 @@ function setGitLiveCache(prsList, prStatus) {
 // had two different lists here by historical accident; unified into one.)
 const BOT_USERS = new Set(['codecov[bot]', 'coderabbitai[bot]', 'github-actions[bot]', 'dependabot[bot]', 'codecov', 'coderabbitai', 'sourcery-ai[bot]']);
 
-function getGithubToken() { return localStorage.getItem(GH_TOKEN_KEY) || ''; }
-function setGithubToken(t) { localStorage.setItem(GH_TOKEN_KEY, t); }
-function clearGithubToken() { localStorage.removeItem(GH_TOKEN_KEY); }
+// sessionStorage (not localStorage) for the token specifically — it clears
+// when the tab closes instead of persisting indefinitely as plaintext on
+// disk. The PR data cache below stays in localStorage (non-sensitive), so
+// you still only re-enter the token once per browser session, not per PR.
+function getGithubToken() { return sessionStorage.getItem(GH_TOKEN_KEY) || ''; }
+function setGithubToken(t) { sessionStorage.setItem(GH_TOKEN_KEY, t); }
+function clearGithubToken() { sessionStorage.removeItem(GH_TOKEN_KEY); }
 function promptForGithubToken() {
-  const t = window.prompt('Enter a GitHub Personal Access Token (needs read access to pull requests/checks on ' + REPO + ').\nStored only in this browser\'s localStorage; sent only to api.github.com.');
+  const t = window.prompt('Enter a GitHub Personal Access Token (needs read access to pull requests/checks on ' + REPO + ').\nUse a fine-grained, read-only, single-repo token if possible.\nStored only in this browser tab\'s sessionStorage (cleared when the tab closes); sent only to api.github.com.');
   if (t && t.trim()) { setGithubToken(t.trim()); return t.trim(); }
   return '';
 }
@@ -626,10 +637,12 @@ function initInteractions(root) {
         if (!innerTable) return;
         const rows = innerTable.querySelectorAll('tr[data-comment-user]');
         let anyVisible = false;
+        let myCount = 0;
         rows.forEach(r => {
           const isPageHidden = r.hasAttribute('data-page-hidden');
+          const isMine = r.getAttribute('data-comment-user') === myUser;
+          if (isMine) myCount++;
           if (filtered) {
-            const isMine = r.getAttribute('data-comment-user') === myUser;
             r.style.display = isMine ? '' : 'none';
             if (isMine) anyVisible = true;
           } else {
@@ -637,6 +650,31 @@ function initInteractions(root) {
             if (!isPageHidden) anyVisible = true;
           }
         });
+        // The "show date once per day" grouping (see renderPRTable) was
+        // computed assuming every row is visible in sequence. Filtering can
+        // hide the specific row that was carrying a date's visible stamp
+        // while leaving a same-day row below it on screen with a blank
+        // date cell — recompute the grouping across only the rows that
+        // ended up actually visible. Rows are already in newest-first DOM
+        // order (never reordered), so the first visible row is also always
+        // the "latest comment" for the summary label below — when filtered
+        // to "Only my comments" this naturally becomes the latest comment
+        // *from me*, with no separate code path needed.
+        let lastDate = '';
+        let latestWho = '', latestWhen = '';
+        rows.forEach(r => {
+          if (r.style.display === 'none') return;
+          if (!latestWho) { latestWho = r.getAttribute('data-comment-user'); latestWhen = r.getAttribute('data-when'); }
+          const dateCell = r.querySelector('.comment-date-cell');
+          const rowDate = r.getAttribute('data-date') || '';
+          dateCell.textContent = rowDate !== lastDate ? rowDate : '';
+          lastDate = rowDate;
+        });
+        const countLabel = commentRow.querySelector('.comments-count-label');
+        if (countLabel) {
+          const total = parseInt(countLabel.getAttribute('data-total'), 10) || 0;
+          countLabel.textContent = formatCommentsSummary(filtered ? myCount : total, total, latestWho, latestWhen);
+        }
         // Show/hide "no comments" message
         let noMsg = innerTable.parentElement.querySelector('.no-my-comments');
         if (filtered && !anyVisible) {
@@ -702,28 +740,31 @@ function initInteractions(root) {
       const details = table.querySelectorAll('tr.pr-comments details');
       const anyOpen = Array.from(details).some(d => d.open);
       details.forEach(d => d.open = !anyOpen);
-      btn.textContent = anyOpen ? 'Expand Comments' : 'Collapse Comments';
+      btn.textContent = anyOpen ? 'Expand All Comments' : 'Collapse All Comments';
     });
   });
 
-  // Draft PRs show/hide button
+  // Draft PRs show/hide button — toggles the .hide-drafts class on the
+  // table (see CSS) rather than swapping in a second physical table, so
+  // draft rows stay sorted consistently with everything else.
   root.querySelectorAll('.draft-toggle').forEach(btn => {
     btn.addEventListener('click', () => {
       const tableId = btn.getAttribute('data-draft-table');
-      const wrap = document.getElementById(tableId + '-wrap');
-      if (!wrap) return;
-      const visible = wrap.style.display !== 'none';
-      wrap.style.display = visible ? 'none' : '';
-      btn.textContent = visible ? btn.textContent.replace('Hide', 'Show') : btn.textContent.replace('Show', 'Hide');
+      const table = document.getElementById(tableId);
+      if (!table) return;
+      const nowHidden = table.classList.toggle('hide-drafts');
+      btn.textContent = btn.textContent.replace(nowHidden ? 'Hide' : 'Show', nowHidden ? 'Show' : 'Hide');
     });
   });
 
-  // Table sorting. Guard against markdown tables now renderable inside
-  // comment bodies (via marked.js) — those are plain <th> with no
-  // .sort-indicator span, so wiring sortTable() to them would throw.
+  // Table sorting. :scope > thead th restricts this to each table's own
+  // header row — markdown tables rendered inside comment bodies (via
+  // marked.js) are nested <table> elements with their own <thead>, which
+  // this scoping excludes (their <th> lack .sort-indicator/.no-sort anyway
+  // and must never be wired to sortTable()).
   root.querySelectorAll('table').forEach(table => {
     const state = { col: -1, asc: true };
-    table.querySelectorAll('th').forEach((th, idx) => {
+    table.querySelectorAll(':scope > thead th').forEach((th, idx) => {
       if (!th.querySelector('.sort-indicator')) return;
       th.addEventListener('click', e => {
         if (e.target.classList.contains('resize-handle')) return;
@@ -752,7 +793,13 @@ function initInteractions(root) {
 }
 
 function sortTable(table, colIdx, asc) {
-  const headers = table.querySelectorAll('th');
+  // :scope > thead th restricts the match to this table's own header row.
+  // Plain 'th' matches ANY descendant <th>, including header cells inside
+  // GitHub-Flavored-Markdown tables that marked.js renders inside PR comment
+  // bodies — those have no .sort-indicator span, so touching them here threw
+  // "Cannot set properties of null" the moment any comment contained a
+  // markdown table. Same class of bug as the tbody row-scoping fix below.
+  const headers = table.querySelectorAll(':scope > thead th');
   // Skip no-sort headers (Reviewers/Checks) — otherwise every sort click
   // clobbers their intentionally-blank indicator back to a visible '⇅'.
   headers.forEach(h => {

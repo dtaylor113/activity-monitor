@@ -616,12 +616,14 @@ Parent Target End | Marketing Impact Notes | Parent
 only thing it reads from the seed data is `D.meta.github_user`. Everything
 else is fetched live, client-side, directly from the GitHub GraphQL API via
 a manual "🔄 Refresh Git Data (Live)" button, using a GitHub personal access
-token entered once and cached in the browser's `localStorage` alongside the
-last fetch result. This keeps `gather.sh` from needing PR/review/comment
-scopes or API calls at all.
+token entered once per browser session. This keeps `gather.sh` from needing
+PR/review/comment scopes or API calls at all.
 
-- **Three PR sections**: My PRs / PRs I'm Reviewing / PRs I've Approved,
-  each in its own table, default-sorted by PR number ascending
+- **Single merged PR table** (My PRs / PRs I'm Reviewing / PRs I've Approved
+  used to be 3 separate tables with identical columns — now one table,
+  default-sorted by PR number ascending). Your own username renders in
+  green in the Author column when you're the author; no separate "Role"
+  column (tried, added no value beyond that).
 - **Reviewer state is the raw GitHub API value** — each reviewer's latest
   `PullRequestReview.state`, lowercased, with no synthesized "ball in your
   court" transitions. The one adjustment: a dismissed review for someone
@@ -632,13 +634,31 @@ scopes or API calls at all.
   `child_pr_status` — keep both in sync if this logic changes).
 - **No team-based reviewer resolution** — only individually-requested
   reviewers are tracked (`user-review-requested:` GraphQL search qualifier).
+- **Draft PRs**: hidden by default via a CSS class on the table
+  (`.hide-drafts`) rather than a second physical table, so drafts stay
+  sorted consistently with everything else once revealed. One global
+  "Show Draft PRs (N)" toggle covers all PRs, not just authored ones.
 - Columns: PR | Title | Author | Reviewers | Checks | Created. Reviewers/Checks
   have no meaningful sort order and are excluded from click-to-sort.
 - Comment sub-rows beneath each PR (collapsed by default; "Expand Comments"
   expands all in a section), merging issue comments + review-thread comments
   + non-empty review bodies, bot-filtered, rendered as full GitHub-Flavored
-  Markdown via `marked.js` (loaded from a CDN — the one external dependency
-  in this file).
+  Markdown via `marked.js` (loaded from a CDN — one of two external
+  dependencies in this file).
+
+**Security notes** (PR comment bodies are untrusted — anyone who can comment
+on a tracked PR controls that text):
+- Rendered markdown is piped through `DOMPurify.sanitize()` (also CDN-loaded)
+  before hitting `innerHTML` — `marked.js` itself does not sanitize raw HTML
+  embedded in markdown source, so skipping this step would be a stored-XSS
+  hole via PR comments.
+- The GitHub token is kept in `sessionStorage`, not `localStorage` — cleared
+  when the tab closes rather than persisting indefinitely as plaintext on
+  disk. The live-fetch PR data cache (`git_live_data_cache`, non-sensitive)
+  still uses `localStorage` so a page reload doesn't force a re-fetch.
+- The token prompt recommends a fine-grained, read-only, single-repo PAT —
+  that scope choice determines actual blast radius if the token ever leaks,
+  independent of where it's stored.
 
 ### Linking
 
