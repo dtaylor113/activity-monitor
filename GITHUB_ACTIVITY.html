@@ -91,9 +91,23 @@ table.hide-drafts tr.pr-draft-row + tr.pr-comments { display: none; }
 const D = { prs: [], pr_status: {} };
 const JIRA = 'https://redhat.atlassian.net/browse/';
 const GH = 'https://github.com/RedHatInsights/uhc-portal/pull/';
+// Bump this at significant milestones (new features, breaking layout/data
+// changes) — shown in the masthead so anyone using a sent-around copy of
+// this file can tell at a glance if they're on an old version.
+const APP_VERSION = '1.1';
 
 function ghLink(n) { return `<a href="${GH}${n}">#${n}</a>`; }
 function esc(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+// Highlights "you" (the current viewer) wherever your own username appears
+// as a name, not a status — the Author column and comment authorship.
+// Deliberately not green/red/amber/gray: those are all already spoken for
+// by review/check states (approved/failing/pending/dismissed) elsewhere in
+// this file, so reusing one here would make it ambiguous at a glance.
+const MY_NAME_COLOR = '#c084fc';
+function highlightIfMe(name, myUser) {
+  return name === myUser ? `<span style="color:${MY_NAME_COLOR};">${esc(name)}</span>` : esc(name);
+}
 
 // Shared relative-age formatter — used for both the PR "Created" column and
 // the comments-summary "latest from" line, so the two stay consistent.
@@ -230,19 +244,21 @@ function renderPRTable(prs, tableId, myUser) {
   html += `</tr></thead><tbody>`;
   prs.forEach(pr => {
     const st = (D.pr_status && D.pr_status[pr.number]) || {};
-    const authorHtml = pr.author === myUser
-      ? `<span style="color:#22c55e;">${esc(pr.author)}</span>`
-      : esc(pr.author);
+    const authorHtml = highlightIfMe(pr.author, myUser);
     const reviewHtml = renderReviewers(st.reviewers);
     const checksHtml = renderChecksBadge(st.checks || 'unknown');
     const mergeHtml = renderMergeStatus(st.mergeable_state || '');
     const statusHtml = mergeHtml ? checksHtml + '<br>' + mergeHtml : checksHtml;
     const titleDisplay = (st.draft ? '[DRAFT] ' : '') + (pr.title || '');
-    const createdAge = formatRelativeAge(pr.created || pr.updated);
+    const createdRaw = pr.created || pr.updated || '';
+    const createdAge = formatRelativeAge(createdRaw);
     const commitLine = st.lastCommitAt
       ? `<br><span style="color:#6b7280;font-size:11px;">latest commit: ${formatRelativeAge(st.lastCommitAt)}</span>`
       : '';
-    html += `<tr${st.draft ? ' class="pr-draft-row"' : ''}><td class="nowrap">${ghLink(pr.number)}</td><td>${esc(titleDisplay)}${commitLine}</td><td>${authorHtml}</td><td>${reviewHtml}</td><td class="nowrap">${statusHtml}</td><td class="nowrap">${createdAge}</td></tr>`;
+    // data-sort-value: displayed text ("14 days ago", "Yesterday") doesn't
+    // sort correctly as a string — sortTable() prefers this raw value when
+    // present. PR numbers have the same problem ("#9" vs "#10" as text).
+    html += `<tr${st.draft ? ' class="pr-draft-row"' : ''}><td class="nowrap" data-sort-value="${pr.number}">${ghLink(pr.number)}</td><td>${esc(titleDisplay)}${commitLine}</td><td>${authorHtml}</td><td>${reviewHtml}</td><td class="nowrap">${statusHtml}</td><td class="nowrap" data-sort-value="${esc(createdRaw)}">${createdAge}</td></tr>`;
     const comments = (pr.comments || []).slice().sort((a, b) => (b.when || '').localeCompare(a.when || ''));
     if (comments.length) {
       html += `<tr class="pr-comments"><td></td><td colspan="5">`;
@@ -264,7 +280,7 @@ function renderPRTable(prs, tableId, myUser) {
         const hidden = i >= pageSize;
         html += `<tr data-comment-user="${esc(c.who)}" data-date="${esc(dateOnly)}" data-when="${esc(c.when || '')}" style="vertical-align:top;${hidden ? 'display:none;' : ''}"${hidden ? ' data-page-hidden="1"' : ''}>`;
         html += `<td class="comment-date-cell" style="width:70px;color:#6b7280;white-space:nowrap;padding:${showDate ? '6px' : '2px'} 8px 2px 0;border:none;">${showDate ? esc(dateOnly) : ''}</td>`;
-        html += `<td style="width:110px;color:#60a5fa;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:${showDate ? '6px' : '2px'} 8px 2px 0;border:none;">${esc(c.who)}</td>`;
+        html += `<td style="width:110px;color:#60a5fa;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:${showDate ? '6px' : '2px'} 8px 2px 0;border:none;">${highlightIfMe(c.who, myUser)}</td>`;
         html += `<td class="comment-body" style="color:#9ca3af;white-space:normal;word-wrap:break-word;overflow-wrap:break-word;padding:${showDate ? '6px' : '2px'} 0 2px 0;border:none;">${formatCommentBody(c.body)}</td>`;
         html += `</tr>`;
       });
@@ -437,14 +453,19 @@ function buildLivePrData(data, githubUser) {
   // "authored" is the only category that determines pr.author identity; the
   // other 3 searches just widen which PRs get pulled into the universe below
   // (a PR can match more than one — dedup happens via allNodesByNumber).
+  // created/updated: keep full ISO datetime, do NOT truncate to a bare
+  // YYYY-MM-DD date. A date-only string parses as UTC midnight (per the
+  // ES spec), which can land on the wrong LOCAL calendar day entirely for
+  // negative UTC offsets — e.g. "opened 3 hours ago" (evening UTC) sliced
+  // to a date and reparsed can come out as "Yesterday" in formatRelativeAge.
   for (const node of catNodes.authored) {
     if (!(node.number in prMap)) {
-      prMap[node.number] = { number: node.number, title: node.title, author: githubUser, updated: (node.updatedAt || '').slice(0, 10), created: (node.createdAt || '').slice(0, 10), comments: [] };
+      prMap[node.number] = { number: node.number, title: node.title, author: githubUser, updated: node.updatedAt || '', created: node.createdAt || '', comments: [] };
     }
   }
   for (const node of [...catNodes.requested, ...catNodes.stale, ...catNodes.approved]) {
     if (!(node.number in prMap)) {
-      prMap[node.number] = { number: node.number, title: node.title, author: node.author ? node.author.login : '', updated: (node.updatedAt || '').slice(0, 10), created: (node.createdAt || '').slice(0, 10), comments: [] };
+      prMap[node.number] = { number: node.number, title: node.title, author: node.author ? node.author.login : '', updated: node.updatedAt || '', created: node.createdAt || '', comments: [] };
     }
   }
 
@@ -598,8 +619,11 @@ async function handleGitLiveRefresh() {
 
 function renderPage() {
   const myUser = getMyGithubLogin();
-  const titleText = 'A Better Git Dashboard' + (myUser ? ` for @${esc(myUser)}` : '');
-  let html = `<h1>${titleText}</h1>`;
+  const titleText = 'A Better Git Dashboard' + (myUser ? ` for <span style="color:${MY_NAME_COLOR};">@${esc(myUser)}</span>` : '');
+  let html = `<h1 style="display:flex;align-items:baseline;justify-content:space-between;">`
+    + `<span>${titleText}</span>`
+    + `<span style="font-size:0.5em;font-weight:normal;color:#6b7280;">v${esc(APP_VERSION)}</span>`
+    + `</h1>`;
   html += renderGitLiveControls();
   html += `<div id="git-live-content">`;
   html += renderGitTabContent();
@@ -841,10 +865,21 @@ function sortTable(table, colIdx, asc) {
     const nx = row.nextElementSibling;
     if (nx && nx.classList.contains('pr-comments')) commentRowFor.set(row, nx);
   });
+  // Prefer data-sort-value over displayed text — "14 days ago"/"Yesterday"
+  // and "#9" vs "#10" don't sort correctly as strings (lexicographic, not
+  // numeric/chronological). ISO date strings sort correctly as plain
+  // strings, so only pure-digit values (PR numbers) need numeric compare.
+  const cellSortValue = cell => {
+    const v = cell.getAttribute('data-sort-value');
+    return v !== null ? v : cell.textContent.trim();
+  };
   rows.sort((a, b) => {
-    let aV = a.cells[colIdx].textContent.trim(), bV = b.cells[colIdx].textContent.trim();
-    if (aV === '—' || aV === '') aV = 'zzz';
-    if (bV === '—' || bV === '') bV = 'zzz';
+    let aV = cellSortValue(a.cells[colIdx]), bV = cellSortValue(b.cells[colIdx]);
+    if (aV === '—' || aV === '') aV = asc ? '\uffff' : '';
+    if (bV === '—' || bV === '') bV = asc ? '\uffff' : '';
+    if (/^\d+$/.test(aV) && /^\d+$/.test(bV)) {
+      return asc ? Number(aV) - Number(bV) : Number(bV) - Number(aV);
+    }
     return asc ? aV.localeCompare(bV) : bV.localeCompare(aV);
   });
   rows.forEach(row => {
@@ -855,6 +890,16 @@ function sortTable(table, colIdx, asc) {
 }
 
 renderPage();
+
+// Auto-fetch live data on every load/reload so PR data and relative-age
+// labels ("3 hours ago"/"Yesterday") are never stale from a previous
+// session — this is what a plain reload used to skip, only re-hydrating
+// the old cache. Skipped when no token is set yet: first-time setup still
+// requires the explicit "Refresh" click, since getting a token needs a
+// blocking window.prompt() that shouldn't ambush a fresh page load.
+if (getGithubToken()) {
+  handleGitLiveRefresh();
+}
 </script>
 </body>
 </html>
