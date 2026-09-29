@@ -612,12 +612,18 @@ Parent Target End | Marketing Impact Notes | Parent
 
 ### GITHUB_ACTIVITY.html — GitHub PR Tracking
 
-**Fully independent of `activity-data.js`/`gather.sh`/`assemble.py`** — the
-only thing it reads from the seed data is `D.meta.github_user`. Everything
-else is fetched live, client-side, directly from the GitHub GraphQL API via
-a manual "🔄 Refresh Git Data (Live)" button, using a GitHub personal access
-token entered once per browser session. This keeps `gather.sh` from needing
-PR/review/comment scopes or API calls at all.
+**A fully standalone file — zero dependency on `activity-data.js`,
+`gather.sh`, or `assemble.py`, not even for the username.** All PR data is
+fetched live, client-side, directly from the GitHub GraphQL API via a
+manual "🔄 Refresh Git Data (Live)" button, using a GitHub personal access
+token entered once per browser session. "My username" is resolved from
+that same token via GraphQL's `viewer { login }` field (and the query
+itself uses GitHub's `@me` search token, e.g. `author:@me`, rather than
+interpolating a username) — never hardcoded, never read from a seed file.
+This is what makes it safe to hand just this one file to a coworker: they
+open it, enter their own token, and it works with zero setup. It also
+keeps `gather.sh` from needing PR/review/comment scopes or API calls at
+all.
 
 - **Single merged PR table** (My PRs / PRs I'm Reviewing / PRs I've Approved
   used to be 3 separate tables with identical columns — now one table,

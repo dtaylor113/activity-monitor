@@ -83,14 +83,12 @@ table.hide-drafts tr.pr-draft-row + tr.pr-comments { display: none; }
 <body>
 <div id="app"></div>
 <script>
-(function(){
-  var s = document.createElement('script');
-  s.src = 'activity-data.js?t=' + Date.now();
-  s.onload = function(){ renderPage(); };
-  document.head.appendChild(s);
-})();
-</script>
-<script>
+// Fully standalone — this file has no sidecar-file dependency. All PR data
+// comes from a live GraphQL fetch (see "LIVE GITHUB DATA" below), and "my
+// username" is resolved from the token itself (GraphQL `viewer.login`) the
+// first time it's used, not from any seed file. Sending just this one file
+// to someone else, who enters their own token, works with zero setup.
+const D = { prs: [], pr_status: {} };
 const JIRA = 'https://redhat.atlassian.net/browse/';
 const GH = 'https://github.com/RedHatInsights/uhc-portal/pull/';
 
@@ -183,7 +181,7 @@ function markCommentsSeen(prNumber, upToWhen) {
 }
 
 function renderPRs() {
-  const myUser = D.meta.github_user;
+  const myUser = getMyGithubLogin();
   const byPrNumberAsc = (a, b) => a.number - b.number;
 
   const myPRs = D.prs.filter(pr => pr.author === myUser);
@@ -195,7 +193,7 @@ function renderPRs() {
   const allPRs = myPRs.concat(otherRelevant).sort(byPrNumberAsc);
 
   if (!allPRs.length) {
-    return `<h3>PRs Needing My Attention</h3><div style="color:#6b7280;">No open PRs needing attention.</div>`;
+    return `<h3>PRs</h3><div style="color:#6b7280;">No open PRs.</div>`;
   }
 
   const draftCount = allPRs.reduce((n, pr) => {
@@ -241,7 +239,10 @@ function renderPRTable(prs, tableId, myUser) {
     const statusHtml = mergeHtml ? checksHtml + '<br>' + mergeHtml : checksHtml;
     const titleDisplay = (st.draft ? '[DRAFT] ' : '') + (pr.title || '');
     const createdAge = formatRelativeAge(pr.created || pr.updated);
-    html += `<tr${st.draft ? ' class="pr-draft-row"' : ''}><td class="nowrap">${ghLink(pr.number)}</td><td>${esc(titleDisplay)}</td><td>${authorHtml}</td><td>${reviewHtml}</td><td class="nowrap">${statusHtml}</td><td class="nowrap">${createdAge}</td></tr>`;
+    const commitLine = st.lastCommitAt
+      ? `<br><span style="color:#6b7280;font-size:11px;">latest commit: ${formatRelativeAge(st.lastCommitAt)}</span>`
+      : '';
+    html += `<tr${st.draft ? ' class="pr-draft-row"' : ''}><td class="nowrap">${ghLink(pr.number)}</td><td>${esc(titleDisplay)}${commitLine}</td><td>${authorHtml}</td><td>${reviewHtml}</td><td class="nowrap">${statusHtml}</td><td class="nowrap">${createdAge}</td></tr>`;
     const comments = (pr.comments || []).slice().sort((a, b) => (b.when || '').localeCompare(a.when || ''));
     if (comments.length) {
       html += `<tr class="pr-comments"><td></td><td colspan="5">`;
@@ -309,19 +310,19 @@ function renderMergeStatus(state) {
 }
 
 // ============================================================
-// LIVE GITHUB DATA — client-side fetch, replaces gather.sh/assemble.py
-// for the GitHub tab only. Triggered manually via the "Refresh Git
-// Data (Live)" button. Jira/Action Items tabs are unaffected and
-// remain driven by activity-data.js.
+// LIVE GITHUB DATA — this file's only data source. Triggered manually via
+// the "Refresh Git Data (Live)" button; a GitHub GraphQL fetch using a
+// token entered once (see promptForGithubToken below). No server, no
+// seed file, no gather.sh/assemble.py — this replaces what a prior
+// version of this dashboard fetched server-side for the GitHub portion.
 // ============================================================
 
 const GH_TOKEN_KEY = 'activity_monitor_gh_token';
 const GIT_LIVE_CACHE_KEY = 'git_live_data_cache';
 const REPO = 'RedHatInsights/uhc-portal';
 
-// The Git tab never reads D.prs/D.pr_status as seeded by activity-data.js —
-// those fields are populated exclusively from a live GraphQL fetch, cached
-// here so a page reload doesn't force a re-fetch.
+// D.prs/D.pr_status are populated exclusively from a live GraphQL fetch,
+// cached here so a page reload doesn't force a re-fetch.
 function getGitLiveCache() {
   try {
     const raw = localStorage.getItem(GIT_LIVE_CACHE_KEY);
@@ -331,6 +332,15 @@ function getGitLiveCache() {
 function setGitLiveCache(prsList, prStatus) {
   localStorage.setItem(GIT_LIVE_CACHE_KEY, JSON.stringify({ prsList, prStatus, fetchedAt: new Date().toISOString() }));
 }
+
+// "My" GitHub username is resolved from the token via GraphQL `viewer.login`
+// on first fetch (see fetchLiveGitData) — never hardcoded, never read from a
+// seed file. Cached in localStorage (a username isn't sensitive) so it's
+// still known on a page reload that hydrates from the PR data cache above
+// without hitting the network again.
+const MY_LOGIN_KEY = 'activity_monitor_gh_login';
+function getMyGithubLogin() { return localStorage.getItem(MY_LOGIN_KEY) || ''; }
+function setMyGithubLogin(login) { localStorage.setItem(MY_LOGIN_KEY, login); }
 
 // Bot filter — applied to both comments and reviewers. (The old Python code
 // had two different lists here by historical accident; unified into one.)
@@ -392,17 +402,24 @@ const PR_FRAGMENT = `
   reviewRequests(first: 10) { nodes { requestedReviewer { __typename ... on User { login } } } }
   comments(first: 50) { nodes { author { login } body createdAt } }
   reviewThreads(first: 50) { nodes { isResolved comments(last: 5) { nodes { author { login } body createdAt } } } }
-  commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
+  commits(last: 1) { nodes { commit { statusCheckRollup { state } committedDate } } }
 `;
 
-function buildLiveQuery(githubUser) {
+// Uses GitHub's "@me" search token (resolves to whoever the token belongs
+// to) instead of interpolating a username — this is what lets the query be
+// built with zero prior knowledge of who's using it. `viewer { login }`
+// alongside the search aliases below is the one extra field that gets us
+// the actual username string back, for all the client-side comparisons
+// (author-highlighting, "only my comments", etc.) that still need it.
+function buildLiveQuery() {
   const q = (extra) => `repo:${REPO} is:pr is:open ${extra}`;
   const alias = (name, searchQ) => `${name}: search(query: ${JSON.stringify(q(searchQ))}, type: ISSUE, first: 30) { nodes { ... on PullRequest { ${PR_FRAGMENT} } } }`;
   return `query {
-    ${alias('authored', 'author:' + githubUser)}
-    ${alias('requested', 'user-review-requested:' + githubUser)}
-    ${alias('stale', 'reviewed-by:' + githubUser + ' -review:approved -author:' + githubUser)}
-    ${alias('approved', 'review:approved reviewed-by:' + githubUser + ' -author:' + githubUser)}
+    viewer { login }
+    ${alias('authored', 'author:@me')}
+    ${alias('requested', 'user-review-requested:@me')}
+    ${alias('stale', 'reviewed-by:@me -review:approved -author:@me')}
+    ${alias('approved', 'review:approved reviewed-by:@me -author:@me')}
   }`;
 }
 
@@ -450,14 +467,15 @@ function buildLivePrData(data, githubUser) {
     const reviewers = simplifyReviewers(reviews, prAuthorLogin, requestedLogins);
     const filteredReviewers = reviewers.filter(r => !BOT_USERS.has(r.user));
 
-    const checksState = node.commits && node.commits.nodes && node.commits.nodes[0] && node.commits.nodes[0].commit && node.commits.nodes[0].commit.statusCheckRollup
-      ? node.commits.nodes[0].commit.statusCheckRollup.state : null;
+    const lastCommit = node.commits && node.commits.nodes && node.commits.nodes[0] && node.commits.nodes[0].commit;
+    const checksState = lastCommit && lastCommit.statusCheckRollup ? lastCommit.statusCheckRollup.state : null;
 
     prStatus[String(num)] = {
       reviewers: filteredReviewers,
       checks: mapChecksStatus(checksState),
       mergeable_state: (node.mergeStateStatus || '').toLowerCase(),
-      draft: !!node.isDraft
+      draft: !!node.isDraft,
+      lastCommitAt: (lastCommit && lastCommit.committedDate) || ''
     };
 
     // Merge comments: issue comments + all review-thread comments + non-empty review bodies
@@ -495,8 +513,7 @@ function buildLivePrData(data, githubUser) {
 }
 
 async function fetchLiveGitData(token) {
-  const githubUser = D.meta.github_user;
-  const query = buildLiveQuery(githubUser);
+  const query = buildLiveQuery();
   const resp = await fetch('https://api.github.com/graphql', {
     method: 'POST',
     headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
@@ -509,6 +526,8 @@ async function fetchLiveGitData(token) {
     if (/bad credentials|unauthorized/i.test(msg)) { const e = new Error(msg); e.authError = true; throw e; }
     throw new Error(msg);
   }
+  const githubUser = json.data.viewer.login;
+  setMyGithubLogin(githubUser);
   return buildLivePrData(json.data, githubUser);
 }
 
@@ -533,9 +552,8 @@ function renderGitEmptyState() {
   </div>`;
 }
 
-// Entry point for the GitHub tab's content — hydrates from the localStorage
+// Entry point for the page's content — hydrates from the localStorage
 // cache of the last live fetch if present, otherwise shows an empty state.
-// Deliberately never touches D.prs/D.pr_status as seeded by activity-data.js.
 function renderGitTabContent() {
   const cached = getGitLiveCache();
   if (cached) {
@@ -579,10 +597,9 @@ async function handleGitLiveRefresh() {
 }
 
 function renderPage() {
-  let html = `<div style="display:flex;justify-content:space-between;align-items:baseline;">
-    <h1>Git Activity</h1>
-    <a href="ACTIVITY_MONITOR.html" style="color:#60a5fa;font-size:13px;">Activity Monitor →</a>
-  </div>`;
+  const myUser = getMyGithubLogin();
+  const titleText = 'A Better Git Dashboard' + (myUser ? ` for @${esc(myUser)}` : '');
+  let html = `<h1>${titleText}</h1>`;
   html += renderGitLiveControls();
   html += `<div id="git-live-content">`;
   html += renderGitTabContent();
@@ -629,7 +646,7 @@ function initInteractions(root) {
       const tableId = cb.getAttribute('data-table');
       const table = document.getElementById(tableId);
       if (!table) return;
-      const myUser = D.meta.github_user;
+      const myUser = getMyGithubLogin();
       const filtered = cb.checked;
       // Process each PR's comment table
       table.querySelectorAll('tr.pr-comments').forEach(commentRow => {
@@ -837,7 +854,7 @@ function sortTable(table, colIdx, asc) {
   });
 }
 
-
+renderPage();
 </script>
 </body>
 </html>
