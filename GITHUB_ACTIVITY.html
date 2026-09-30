@@ -70,6 +70,15 @@ tr.pr-comments td { background: #0d0d1a; border-top: none; padding: 3px 10px 6px
 table.hide-drafts tr.pr-draft-row,
 table.hide-drafts tr.pr-draft-row + tr.pr-comments { display: none; }
 
+.focus-mode-toggle { background: rgba(134, 239, 172, 0.12); border: 1px solid rgba(134, 239, 172, 0.3); color: #86efac; font-size: 11px; padding: 3px 10px; border-radius: 3px; cursor: pointer; margin-left: 6px; vertical-align: middle; }
+.focus-mode-toggle:hover { background: rgba(134, 239, 172, 0.2); }
+.focus-mode-toggle.active { background: rgba(134, 239, 172, 0.35); }
+/* Focus Mode hides every row except PRs I authored or where I'm waiting
+   to review — same adjacent-sibling pattern as .hide-drafts above so a
+   hidden row's comment sub-row disappears with it. */
+table.focus-mode tr.pr-not-focus,
+table.focus-mode tr.pr-not-focus + tr.pr-comments { display: none; }
+
 .git-live-btn { background: rgba(165, 180, 252, 0.12); border: 1px solid rgba(165, 180, 252, 0.3); color: #a5b4fc; font-size: 12px; padding: 4px 12px; border-radius: 3px; cursor: pointer; margin-right: 6px; }
 .git-live-btn:hover { background: rgba(165, 180, 252, 0.2); }
 
@@ -118,6 +127,7 @@ table.hide-drafts tr.pr-draft-row + tr.pr-comments { display: none; }
    fit without bleeding into the segment stacked below them — see
    maintainAspectRatio:false paired with this in openDistributionModal(). */
 #distribution-chart-wrap { display: none; height: 480px; }
+#distribution-footnote { display: none; margin-top: 10px; color: #6b7280; font-size: 11px; line-height: 1.4; }
 </style>
 </head>
 <body>
@@ -188,13 +198,14 @@ const GH = 'https://github.com/RedHatInsights/uhc-portal/pull/';
 // Bump this at significant milestones (new features, breaking layout/data
 // changes) — shown in the masthead so anyone using a sent-around copy of
 // this file can tell at a glance if they're on an old version.
-const APP_VERSION = '1.3';
+const APP_VERSION = '1.4';
 // Short (1-2 sentence) human-written summary of each version, shown in a
 // popover when the version badge is clicked. This can't be generated from
 // git at runtime — a standalone HTML file opened by a coworker has no repo
 // or git access at all — so it's manually curated here each time
 // APP_VERSION is bumped. Newest first.
 const CHANGELOG = {
+  '1.4': 'Added a "Focus Mode" button — filters the PR table down to just PRs you authored or are waiting for your review.',
   '1.3': 'Shows a "tested-by-all" tag under the author when a PR has that GitHub label — the closest signal we have to a Jira QA Contact assignment.',
   '1.2': 'Added a team Distribution chart. Click any bar to open matching PRs on GitHub. Version number is now clickable to view this changelog.',
   '1.1': 'Fixed PR sort order and a timezone bug showing wrong ages. Your username is now highlighted in purple. Data auto-refreshes on page load.',
@@ -339,11 +350,13 @@ function renderPRs() {
     return n + (st && st.draft ? 1 : 0);
   }, 0);
 
-  let html = `<h3 style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;"><span>PRs <button class="pr-comments-toggle" data-table="prs-table">Expand All Comments</button>`;
+  let html = `<h3 style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;"><span>PRs`;
   if (draftCount) {
     html += ` <button class="draft-toggle" data-draft-table="prs-table">Show Draft PRs (${draftCount})</button>`;
   }
-  html += ` <label style="font-weight:normal;font-size:12px;cursor:pointer;margin-left:6px;"><input type="checkbox" class="my-comments-filter" data-table="prs-table" style="vertical-align:middle;margin-right:3px;">Only my comments</label></span>`;
+  html += ` <button class="pr-comments-toggle" data-table="prs-table">Expand All Comments</button>`;
+  html += ` <button class="focus-mode-toggle" data-table="prs-table">Focus Mode</button>`;
+  html += ` <label style="font-weight:normal;font-size:12px;cursor:pointer;margin-left:6px;"><input type="checkbox" class="my-comments-filter" data-table="prs-table" style="vertical-align:middle;margin-right:3px;">Show only my comments</label></span>`;
   html += `<button id="pr-distribution-btn" class="pr-distribution-btn" title="Team PR distribution">📊 Distribution</button>`;
   html += `</h3>`;
   html += renderPRTable(allPRs, 'prs-table', myUser);
@@ -381,10 +394,18 @@ function renderPRTable(prs, tableId, myUser) {
     const commitLine = st.lastCommitAt
       ? `<br><span style="color:#6b7280;font-size:11px;">code changed: ${formatRelativeAge(st.lastCommitAt)}</span>`
       : '';
+    // Focus Mode relevance: PRs I authored, or PRs where I'm currently
+    // waiting to review (pending — not already approved/commented/etc.).
+    // Rows failing this get tagged .pr-not-focus, hidden only once Focus
+    // Mode is toggled on (see CSS) — independent of the draft-row class.
+    const isMine = pr.author === myUser;
+    const isPendingMine = (st.reviewers || []).some(r => r.user === myUser && r.state === 'pending');
+    const focusClass = (isMine || isPendingMine) ? '' : 'pr-not-focus';
+    const rowClass = [st.draft && 'pr-draft-row', focusClass].filter(Boolean).join(' ');
     // data-sort-value: displayed text ("14 days ago", "Yesterday") doesn't
     // sort correctly as a string — sortTable() prefers this raw value when
     // present. PR numbers have the same problem ("#9" vs "#10" as text).
-    html += `<tr${st.draft ? ' class="pr-draft-row"' : ''}><td class="nowrap" data-sort-value="${pr.number}">${ghLink(pr.number)}</td><td>${esc(titleDisplay)}${commitLine}</td><td>${authorHtml}</td><td>${reviewHtml}</td><td class="nowrap">${statusHtml}</td><td class="nowrap" data-sort-value="${esc(createdRaw)}">${createdAge}</td></tr>`;
+    html += `<tr${rowClass ? ` class="${rowClass}"` : ''}><td class="nowrap" data-sort-value="${pr.number}">${ghLink(pr.number)}</td><td>${esc(titleDisplay)}${commitLine}</td><td>${authorHtml}</td><td>${reviewHtml}</td><td class="nowrap">${statusHtml}</td><td class="nowrap" data-sort-value="${esc(createdRaw)}">${createdAge}</td></tr>`;
     const comments = (pr.comments || []).slice().sort((a, b) => (b.when || '').localeCompare(a.when || ''));
     if (comments.length) {
       html += `<tr class="pr-comments"><td></td><td colspan="5">`;
@@ -905,6 +926,7 @@ function ensureDistributionModal() {
     <h2>PR Distribution by Team Member</h2>
     <div id="distribution-status"><div id="distribution-spinner"></div>Loading…</div>
     <div id="distribution-chart-wrap"><canvas id="distribution-canvas" height="90"></canvas></div>
+    <div id="distribution-footnote">* "# Reviewed" = your latest formal review per PR (Approved, Changes Requested, or Commented-via-review) — plain PR comments outside a review don't count.</div>
   </div>`;
   document.body.appendChild(overlay);
   overlay.addEventListener('click', e => { if (e.target === overlay) closeDistributionModal(); });
@@ -931,6 +953,7 @@ async function openDistributionModal() {
   const chartWrap = document.getElementById('distribution-chart-wrap');
   overlay.classList.add('open');
   chartWrap.style.display = 'none';
+  document.getElementById('distribution-footnote').style.display = 'none';
   statusEl.style.display = 'block';
   statusEl.style.color = '#6b7280';
   // innerHTML (not textContent) here since the spinner div needs to
@@ -953,6 +976,7 @@ async function openDistributionModal() {
     }
     statusEl.style.display = 'none';
     chartWrap.style.display = 'block';
+    document.getElementById('distribution-footnote').style.display = 'block';
     const canvas = document.getElementById('distribution-canvas');
     if (distributionChartInstance) distributionChartInstance.destroy();
     // Index-aligned with the datasets array below — one source of truth
@@ -1244,6 +1268,20 @@ function initInteractions(root) {
       if (!table) return;
       const nowHidden = table.classList.toggle('hide-drafts');
       btn.textContent = btn.textContent.replace(nowHidden ? 'Hide' : 'Show', nowHidden ? 'Show' : 'Hide');
+    });
+  });
+
+  // Focus Mode — toggles the .focus-mode class on the table (see CSS),
+  // hiding every row except PRs I authored or am currently waiting to
+  // review. Same class-toggle-on-table approach as draft-toggle above.
+  root.querySelectorAll('.focus-mode-toggle').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const tableId = btn.getAttribute('data-table');
+      const table = document.getElementById(tableId);
+      if (!table) return;
+      const active = table.classList.toggle('focus-mode');
+      btn.classList.toggle('active', active);
+      btn.textContent = active ? 'Show All PRs' : 'Focus Mode';
     });
   });
 
