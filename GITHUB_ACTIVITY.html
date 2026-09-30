@@ -188,13 +188,14 @@ const GH = 'https://github.com/RedHatInsights/uhc-portal/pull/';
 // Bump this at significant milestones (new features, breaking layout/data
 // changes) — shown in the masthead so anyone using a sent-around copy of
 // this file can tell at a glance if they're on an old version.
-const APP_VERSION = '1.2';
+const APP_VERSION = '1.3';
 // Short (1-2 sentence) human-written summary of each version, shown in a
 // popover when the version badge is clicked. This can't be generated from
 // git at runtime — a standalone HTML file opened by a coworker has no repo
 // or git access at all — so it's manually curated here each time
 // APP_VERSION is bumped. Newest first.
 const CHANGELOG = {
+  '1.3': 'Shows a "tested-by-all" tag under the author when a PR has that GitHub label — the closest signal we have to a Jira QA Contact assignment.',
   '1.2': 'Added a team Distribution chart. Click any bar to open matching PRs on GitHub. Version number is now clickable to view this changelog.',
   '1.1': 'Fixed PR sort order and a timezone bug showing wrong ages. Your username is now highlighted in purple. Data auto-refreshes on page load.',
   '1.0': 'Initial single page git dashboard. Live-fetches your open, reviewing, and approved PRs into one table via the GitHub API. Includes per-PR comment threads and a "my comments" filter. Fully self-contained — works for anyone with their own GitHub token, no build step or server needed.'
