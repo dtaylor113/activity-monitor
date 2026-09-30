@@ -197,7 +197,7 @@ const APP_VERSION = '1.2';
 const CHANGELOG = {
   '1.2': 'Added a team Distribution chart. Click any bar to open matching PRs on GitHub. Version number is now clickable to view this changelog.',
   '1.1': 'Fixed PR sort order and a timezone bug showing wrong ages. Your username is now highlighted in purple. Data auto-refreshes on page load.',
-  '1.0': 'First standalone version. Merged PR tables into one view. Added comment threads and a "my comments" filter. Works with any GitHub token.'
+  '1.0': 'Initial single page git dashboard. Live-fetches your open, reviewing, and approved PRs into one table via the GitHub API. Includes per-PR comment threads and a "my comments" filter. Fully self-contained — works for anyone with their own GitHub token, no build step or server needed.'
 };
 
 function ghLink(n) { return `<a href="${GH}${n}">#${n}</a>`; }
