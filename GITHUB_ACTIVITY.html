@@ -369,7 +369,7 @@ function renderPRTable(prs, tableId, myUser) {
   html += `</tr></thead><tbody>`;
   prs.forEach(pr => {
     const st = (D.pr_status && D.pr_status[pr.number]) || {};
-    const authorHtml = highlightIfMe(pr.author, myUser);
+    const authorHtml = highlightIfMe(pr.author, myUser) + testedByAllBadge(pr.labels);
     const reviewHtml = renderReviewers(st.reviewers);
     const checksHtml = renderChecksBadge(st.checks || 'unknown');
     const mergeHtml = renderMergeStatus(st.mergeable_state || '');
@@ -419,6 +419,11 @@ function renderPRTable(prs, tableId, myUser) {
   });
   html += `</tbody></table>`;
   return html;
+}
+
+function testedByAllBadge(labels) {
+  if (!labels || !labels.includes(TESTED_BY_ALL_LABEL)) return '';
+  return `<br><span style="display:inline-block;margin-top:2px;padding:1px 6px;border-radius:10px;background:#374151;color:#d1d5db;font-size:10px;">${TESTED_BY_ALL_LABEL}</span>`;
 }
 
 function renderReviewers(reviewers) {
@@ -544,7 +549,15 @@ const PR_FRAGMENT = `
   comments(first: 50) { nodes { author { login } body createdAt } }
   reviewThreads(first: 50) { nodes { isResolved comments(last: 5) { nodes { author { login } body createdAt } } } }
   commits(last: 1) { nodes { commit { statusCheckRollup { state } committedDate } } }
+  labels(first: 20) { nodes { name } }
 `;
+
+// GitHub label convention: the PR author applies this when they've
+// assigned a Jira "QA Contact" (a reviewer with extra sign-off duties) on
+// the linked ticket. There's no live Jira cross-reference in this
+// standalone dashboard (see fetchLiveGitData — GitHub-only), so this
+// label is the closest available signal without asking for a Jira token.
+const TESTED_BY_ALL_LABEL = 'tested-by-all';
 
 // Uses GitHub's "@me" search token (resolves to whoever the token belongs
 // to) instead of interpolating a username — this is what lets the query be
@@ -583,14 +596,15 @@ function buildLivePrData(data, githubUser) {
   // ES spec), which can land on the wrong LOCAL calendar day entirely for
   // negative UTC offsets — e.g. "opened 3 hours ago" (evening UTC) sliced
   // to a date and reparsed can come out as "Yesterday" in formatRelativeAge.
+  const labelsOf = node => (node.labels && node.labels.nodes || []).map(l => l.name);
   for (const node of catNodes.authored) {
     if (!(node.number in prMap)) {
-      prMap[node.number] = { number: node.number, title: node.title, author: githubUser, updated: node.updatedAt || '', created: node.createdAt || '', comments: [] };
+      prMap[node.number] = { number: node.number, title: node.title, author: githubUser, updated: node.updatedAt || '', created: node.createdAt || '', comments: [], labels: labelsOf(node) };
     }
   }
   for (const node of [...catNodes.requested, ...catNodes.stale, ...catNodes.approved]) {
     if (!(node.number in prMap)) {
-      prMap[node.number] = { number: node.number, title: node.title, author: node.author ? node.author.login : '', updated: node.updatedAt || '', created: node.createdAt || '', comments: [] };
+      prMap[node.number] = { number: node.number, title: node.title, author: node.author ? node.author.login : '', updated: node.updatedAt || '', created: node.createdAt || '', comments: [], labels: labelsOf(node) };
     }
   }
 
