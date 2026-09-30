@@ -10,6 +10,19 @@
      are untrusted (anyone who can comment on a tracked PR), and marked.js
      itself does not sanitize raw HTML embedded in markdown source. -->
 <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
+<!-- Renders the team PR-distribution stacked bar chart (Distribution
+     button on the PRs table). Loaded upfront like the two libs above,
+     even though it's only used after a click — same simple strategy,
+     avoids async-script-load race conditions if the button is clicked
+     right after page load. The GraphQL query it depends on is NOT
+     fetched upfront though — see openDistributionModal() — only this
+     ~200KB rendering library is preloaded, not the API call itself. -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<!-- Renders the numeric value inside each stacked-bar segment on the
+     Distribution chart — Chart.js has no built-in data-label rendering,
+     this is the official plugin for it. Auto-registers itself globally
+     once loaded, so no explicit Chart.register() call is needed below. -->
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2"></script>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body {
@@ -78,6 +91,33 @@ table.hide-drafts tr.pr-draft-row + tr.pr-comments { display: none; }
 .comment-body a { color: #60a5fa; }
 .comment-body hr { border: none; border-top: 1px solid #262b36; margin: 6px 0; }
 
+.pr-distribution-btn { background: rgba(165, 180, 252, 0.12); border: 1px solid rgba(165, 180, 252, 0.3); color: #a5b4fc; font-size: 11px; padding: 3px 10px; border-radius: 3px; cursor: pointer; white-space: nowrap; }
+.pr-distribution-btn:hover { background: rgba(165, 180, 252, 0.2); }
+
+/* Distribution chart modal */
+#distribution-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 1000; align-items: center; justify-content: center; }
+#distribution-overlay.open { display: flex; }
+#distribution-modal { background: #111; border: 1px solid #333; border-radius: 6px; padding: 20px; width: min(90vw, 900px); max-height: 85vh; overflow-y: auto; position: relative; }
+#distribution-modal h2 { font-size: 1.1em; color: #a5b4fc; margin-bottom: 12px; }
+#distribution-close { position: absolute; top: 14px; right: 16px; background: none; border: none; color: #9ca3af; font-size: 20px; cursor: pointer; line-height: 1; }
+#distribution-close:hover { color: #e5e7eb; }
+#distribution-status { color: #6b7280; font-size: 13px; padding: 40px 0; text-align: center; }
+#distribution-spinner { width: 28px; height: 28px; border: 3px solid #262b36; border-top-color: #a5b4fc; border-radius: 50%; margin: 0 auto 12px auto; animation: distribution-spin 0.8s linear infinite; }
+@keyframes distribution-spin { to { transform: rotate(360deg); } }
+
+#version-badge { cursor: pointer; }
+#version-badge:hover { color: #a5b4fc; text-decoration: underline; }
+#changelog-popover { display: none; position: absolute; top: 28px; right: 0; background: #1a1a1a; border: 1px solid #333; border-radius: 6px; padding: 12px 14px; width: 340px; max-height: 60vh; overflow-y: auto; z-index: 1001; box-shadow: 0 4px 16px rgba(0,0,0,0.5); font-size: 12px; font-weight: normal; }
+#changelog-popover.open { display: block; }
+#changelog-popover .changelog-entry { margin-bottom: 10px; }
+#changelog-popover .changelog-entry:last-child { margin-bottom: 0; }
+#changelog-popover .changelog-version { color: #a5b4fc; font-weight: 700; margin-bottom: 2px; }
+#changelog-popover .changelog-desc { color: #9ca3af; line-height: 1.4; }
+/* height is set explicitly (not left to aspect-ratio) so small-count
+   segments get enough real pixel height for their number + underline to
+   fit without bleeding into the segment stacked below them — see
+   maintainAspectRatio:false paired with this in openDistributionModal(). */
+#distribution-chart-wrap { display: none; height: 480px; }
 </style>
 </head>
 <body>
@@ -88,15 +128,98 @@ table.hide-drafts tr.pr-draft-row + tr.pr-comments { display: none; }
 // username" is resolved from the token itself (GraphQL `viewer.login`) the
 // first time it's used, not from any seed file. Sending just this one file
 // to someone else, who enters their own token, works with zero setup.
+// chartjs-plugin-datalabels' UMD build only exposes a global
+// ChartDataLabels object — it does NOT self-register with Chart.js despite
+// being loaded via a plain <script> tag. Without this call, the
+// options.plugins.datalabels config on the Distribution chart is inert.
+if (typeof Chart !== 'undefined' && typeof ChartDataLabels !== 'undefined') {
+  // Neither Chart.js nor the datalabels plugin has a built-in "underline
+  // this text" option (canvas text has no text-decoration concept) — this
+  // custom plugin draws a short line under each rendered segment value,
+  // sized to the actual measured text width so it doesn't just guess a
+  // fixed width. Font here must stay in sync with the datalabels `font`
+  // option below (bold, default ~12px) or the underline will be
+  // noticeably wider/narrower than the number it's under.
+  const valueUnderlinePlugin = {
+    id: 'valueUnderline',
+    afterDatasetsDraw(chart) {
+      const ctx = chart.ctx;
+      chart.data.datasets.forEach((dataset, datasetIndex) => {
+        const meta = chart.getDatasetMeta(datasetIndex);
+        if (meta.hidden) return;
+        meta.data.forEach((element, index) => {
+          const value = dataset.data[index];
+          if (!value) return; // matches datalabels' formatter: v>0 ? v : ''
+          // element.y/element.base order isn't guaranteed by direction —
+          // normalize to top/bottom explicitly rather than assuming which
+          // one is numerically smaller.
+          const top = Math.min(element.y, element.base);
+          const bottom = Math.max(element.y, element.base);
+          const segmentHeight = bottom - top;
+          // A short segment (small count relative to the chart's scale)
+          // has no room for a number + gap + underline without the line
+          // bleeding into the segment stacked below it — skip the
+          // underline entirely rather than draw it somewhere wrong. The
+          // number itself (drawn by chartjs-plugin-datalabels) still
+          // shows regardless.
+          if (segmentHeight < 20) { return; }
+          ctx.save();
+          ctx.font = 'bold 12px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+          const textWidth = ctx.measureText(String(value)).width;
+          const centerY = (top + bottom) / 2;
+          const underlineY = Math.min(centerY + 7, bottom - 3);
+          ctx.strokeStyle = '#0a0a0a';
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.moveTo(element.x - textWidth / 2, underlineY);
+          ctx.lineTo(element.x + textWidth / 2, underlineY);
+          ctx.stroke();
+          ctx.restore();
+        });
+      });
+    }
+  };
+  Chart.register(ChartDataLabels, valueUnderlinePlugin);
+}
+
 const D = { prs: [], pr_status: {} };
 const JIRA = 'https://redhat.atlassian.net/browse/';
 const GH = 'https://github.com/RedHatInsights/uhc-portal/pull/';
 // Bump this at significant milestones (new features, breaking layout/data
 // changes) — shown in the masthead so anyone using a sent-around copy of
 // this file can tell at a glance if they're on an old version.
-const APP_VERSION = '1.1';
+const APP_VERSION = '1.2';
+// Short (1-2 sentence) human-written summary of each version, shown in a
+// popover when the version badge is clicked. This can't be generated from
+// git at runtime — a standalone HTML file opened by a coworker has no repo
+// or git access at all — so it's manually curated here each time
+// APP_VERSION is bumped. Newest first.
+const CHANGELOG = {
+  '1.2': 'Added a team Distribution chart. Click any bar to open matching PRs on GitHub. Version number is now clickable to view this changelog.',
+  '1.1': 'Fixed PR sort order and a timezone bug showing wrong ages. Your username is now highlighted in purple. Data auto-refreshes on page load.',
+  '1.0': 'First standalone version. Merged PR tables into one view. Added comment threads and a "my comments" filter. Works with any GitHub token.'
+};
 
 function ghLink(n) { return `<a href="${GH}${n}">#${n}</a>`; }
+// Used by the Distribution chart's segment clicks. GitHub search does NOT
+// support ORing different qualifiers together (verified live: "author:X OR
+// review-requested:X" returns 0 hits even when each alone has results).
+// That used to force an approximation when "# Reviews" was one merged
+// number (reviewed-by: and review-requested: are mutually exclusive
+// states, so linking to either one alone dead-ended for whichever people
+// happened to be in the other state). Fixed properly by splitting the
+// chart into 3 segments instead of 2 (Reviewed / Pending / Created), each
+// counted from exactly one qualifier — see computeDistribution() and
+// DATASET_QUALIFIERS in openDistributionModal(). No more approximation:
+// every segment's count and its link now come from the same query.
+function githubPrSearchUrl(qualifier, login, isBot) {
+  // GitHub Apps need an "app/" prefix in search qualifiers — their GraphQL
+  // login (e.g. "red-hat-konflux") doesn't match by itself. Confirmed live
+  // across all 3 qualifiers we use (author:, reviewed-by:, review-
+  // requested:) — regular users never use this prefix.
+  const target = isBot ? `app/${login}` : login;
+  return `https://github.com/${REPO}/pulls?q=${encodeURIComponent(`is:pr is:open ${qualifier}:${target}`)}`;
+}
 function esc(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
 // Highlights "you" (the current viewer) wherever your own username appears
@@ -215,11 +338,13 @@ function renderPRs() {
     return n + (st && st.draft ? 1 : 0);
   }, 0);
 
-  let html = `<h3>PRs <button class="pr-comments-toggle" data-table="prs-table">Expand All Comments</button>`;
+  let html = `<h3 style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;"><span>PRs <button class="pr-comments-toggle" data-table="prs-table">Expand All Comments</button>`;
   if (draftCount) {
     html += ` <button class="draft-toggle" data-draft-table="prs-table">Show Draft PRs (${draftCount})</button>`;
   }
-  html += ` <label style="font-weight:normal;font-size:12px;cursor:pointer;margin-left:6px;"><input type="checkbox" class="my-comments-filter" data-table="prs-table" style="vertical-align:middle;margin-right:3px;">Only my comments</label></h3>`;
+  html += ` <label style="font-weight:normal;font-size:12px;cursor:pointer;margin-left:6px;"><input type="checkbox" class="my-comments-filter" data-table="prs-table" style="vertical-align:middle;margin-right:3px;">Only my comments</label></span>`;
+  html += `<button id="pr-distribution-btn" class="pr-distribution-btn" title="Team PR distribution">📊 Distribution</button>`;
+  html += `</h3>`;
   html += renderPRTable(allPRs, 'prs-table', myUser);
 
   return html;
@@ -253,7 +378,7 @@ function renderPRTable(prs, tableId, myUser) {
     const createdRaw = pr.created || pr.updated || '';
     const createdAge = formatRelativeAge(createdRaw);
     const commitLine = st.lastCommitAt
-      ? `<br><span style="color:#6b7280;font-size:11px;">latest commit: ${formatRelativeAge(st.lastCommitAt)}</span>`
+      ? `<br><span style="color:#6b7280;font-size:11px;">code changed: ${formatRelativeAge(st.lastCommitAt)}</span>`
       : '';
     // data-sort-value: displayed text ("14 days ago", "Yesterday") doesn't
     // sort correctly as a string — sortTable() prefers this raw value when
@@ -360,7 +485,7 @@ function setMyGithubLogin(login) { localStorage.setItem(MY_LOGIN_KEY, login); }
 
 // Bot filter — applied to both comments and reviewers. (The old Python code
 // had two different lists here by historical accident; unified into one.)
-const BOT_USERS = new Set(['codecov[bot]', 'coderabbitai[bot]', 'github-actions[bot]', 'dependabot[bot]', 'codecov', 'coderabbitai', 'sourcery-ai[bot]']);
+const BOT_USERS = new Set(['codecov[bot]', 'coderabbitai[bot]', 'github-actions[bot]', 'dependabot[bot]', 'codecov', 'coderabbitai', 'sourcery-ai[bot]', 'sourcery-ai']);
 
 // sessionStorage (not localStorage) for the token specifically — it clears
 // when the tab closes instead of persisting indefinitely as plaintext on
@@ -496,6 +621,12 @@ function buildLivePrData(data, githubUser) {
       checks: mapChecksStatus(checksState),
       mergeable_state: (node.mergeStateStatus || '').toLowerCase(),
       draft: !!node.isDraft,
+      // GitHub's GraphQL Commit type has no push-timestamp field (only
+      // authoredDate/committedDate) — a push is a ref-update event, not
+      // commit metadata, and isn't exposed here. This is the commit's own
+      // timestamp, which can predate the actual push by any amount if
+      // someone commits locally before pushing. Labeled "code changed:"
+      // in the UI rather than "pushed" for that reason.
       lastCommitAt: (lastCommit && lastCommit.committedDate) || ''
     };
 
@@ -550,6 +681,137 @@ async function fetchLiveGitData(token) {
   const githubUser = json.data.viewer.login;
   setMyGithubLogin(githubUser);
   return buildLivePrData(json.data, githubUser);
+}
+
+// Lightweight fragment for the Distribution chart — deliberately excludes
+// comments/checks/etc. (not needed for a per-person PR count), unlike the
+// full PR_FRAGMENT above. Runs against ALL open PRs in the repo (not
+// scoped to @me) since the whole point is a team-wide view.
+// __typename is requested on every actor field specifically so bot
+// detection can use GitHub's own authoritative type system (see
+// isBotActor() below) instead of relying solely on a hardcoded login
+// list — confirmed live that e.g. red-hat-konflux and sourcery-ai are
+// both __typename:"Bot" even though their logins don't look alike and
+// neither has a "[bot]" suffix, which is exactly the kind of case a
+// manually-maintained string list keeps missing.
+const TEAM_PR_FRAGMENT = `
+  number
+  author { __typename login }
+  reviews(first: 50) { nodes { state author { __typename login } } }
+  reviewRequests(first: 20) { nodes { requestedReviewer { __typename ... on User { login } ... on Bot { login } } } }
+`;
+
+function buildTeamDistributionQuery() {
+  return `query {
+    search(query: ${JSON.stringify(`repo:${REPO} is:pr is:open`)}, type: ISSUE, first: 100) {
+      nodes { ... on PullRequest { ${TEAM_PR_FRAGMENT} } }
+    }
+  }`;
+}
+
+// Pure function (no DOM/fetch) so it's independently testable.
+//
+// Split into 3 buckets, not 2, specifically so every chart segment maps
+// 1:1 onto a single GitHub search qualifier with NO approximation:
+//   - reviewedCount: already submitted a review -> matches reviewed-by:X
+//   - pendingCount:  requested, hasn't reviewed yet -> matches review-requested:X
+//   - createdCount:  authored -> matches author:X
+// These first two used to be merged into one "# Reviews" number (via
+// simplifyReviewers' "reviewed OR still requested" union), which was
+// impossible to link to accurately — GitHub can't OR those two qualifiers
+// together (verified live), so every click had to guess one or the other
+// and dead-end whenever that specific person's specific PRs were actually
+// in the other bucket. Splitting them removes the guess entirely.
+// Bot detection prefers GitHub's own __typename over the hardcoded
+// BOT_USERS list — the list is kept only as a fallback for accounts that
+// function like bots but for whatever reason aren't GraphQL-typed as one.
+// Only used to filter REVIEW/REQUEST noise (CodeRabbit, Codecov, Sourcery
+// automated commentary isn't meaningful "who's reviewing" data) — NOT
+// applied to authorship. Bot-authored PRs (e.g. an automated dependency-
+// bump bot) DO count in "# Created" and appear in the chart, since that
+// volume is something the user explicitly wants visible.
+function isBotActor(actor) {
+  return !!actor && (actor.__typename === 'Bot' || BOT_USERS.has(actor.login));
+}
+
+function computeDistribution(prNodes) {
+  const createdCount = {};
+  const reviewedCount = {};
+  const pendingCount = {};
+  // Tracks every login ever seen with __typename:"Bot", regardless of
+  // which bucket it ended up in — used by githubPrSearchUrl() to add the
+  // "app/" prefix GitHub's search requires for GitHub-App-authored
+  // content (confirmed live: "author:red-hat-konflux" finds nothing,
+  // "author:app/red-hat-konflux" finds exactly its PRs). Bots without a
+  // GraphQL Bot type (nothing seen so far, but BOT_USERS-listed ones are
+  // possible in principle) won't get this prefix — GitHub's plain-login
+  // form is what's needed for those instead.
+  const botLogins = new Set();
+  for (const node of prNodes) {
+    const authorLogin = node.author ? node.author.login : '';
+    if (node.author && node.author.__typename === 'Bot') botLogins.add(authorLogin);
+    if (authorLogin) {
+      createdCount[authorLogin] = (createdCount[authorLogin] || 0) + 1;
+    }
+    const reviews = (node.reviews.nodes || [])
+      .filter(r => !isBotActor(r.author))
+      .map(r => ({ state: r.state, user: r.author ? r.author.login : '' }));
+    // A PR's requested reviewer can be a whole GitHub Team (e.g.
+    // "uhc-portal-senior-staff") rather than an individual — a repo
+    // Action auto-assigns one specific team member as an individual
+    // User-typed reviewer shortly after, so that person's own pending
+    // count already reflects the assignment. The raw team-level request
+    // itself is deliberately NOT counted here (confirmed live: 13 of 15
+    // currently-open team-requested PRs already have that individual
+    // assignment) — counting it too would double-count the same
+    // work-item, and the couple of older PRs predating the Action just
+    // stay uncounted rather than attributed to anyone.
+    const requestedLogins = (node.reviewRequests.nodes || [])
+      .map(rr => rr.requestedReviewer)
+      .filter(rev => rev && rev.__typename !== 'Team' && !isBotActor(rev))
+      .map(rev => rev.login)
+      .filter(Boolean);
+    const reviewers = simplifyReviewers(reviews, authorLogin, requestedLogins);
+    for (const r of reviewers) {
+      const bucket = r.state === 'pending' ? pendingCount : reviewedCount;
+      bucket[r.user] = (bucket[r.user] || 0) + 1;
+    }
+  }
+  // "The team" isn't a hardcoded roster anywhere — it's derived from
+  // whoever currently authored or is reviewing one of the repo's open
+  // PRs, so this stays accurate with zero manual upkeep as people join,
+  // leave, or their username changes.
+  const roster = Array.from(new Set([...Object.keys(createdCount), ...Object.keys(reviewedCount), ...Object.keys(pendingCount)]));
+  const totalFor = u => (reviewedCount[u] || 0) + (pendingCount[u] || 0) + (createdCount[u] || 0);
+  roster.sort((a, b) => totalFor(b) - totalFor(a) || a.localeCompare(b));
+  return {
+    users: roster,
+    isBot: roster.map(u => botLogins.has(u)),
+    reviewedCounts: roster.map(u => reviewedCount[u] || 0),
+    pendingCounts: roster.map(u => pendingCount[u] || 0),
+    createdCounts: roster.map(u => createdCount[u] || 0)
+  };
+}
+
+// Only called from openDistributionModal() on a button click — never on
+// page load or auto-refresh. This is a heavier, repo-wide query (all open
+// PRs, not just @me), so it's kept fully separate from the main live-fetch
+// path and its cache.
+async function fetchTeamDistribution(token) {
+  const query = buildTeamDistributionQuery();
+  const resp = await fetch('https://api.github.com/graphql', {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query })
+  });
+  if (resp.status === 401) { const e = new Error('Unauthorized'); e.authError = true; throw e; }
+  const json = await resp.json();
+  if (json.errors && json.errors.length) {
+    const msg = json.errors.map(e => e.message).join('; ');
+    if (/bad credentials|unauthorized/i.test(msg)) { const e = new Error(msg); e.authError = true; throw e; }
+    throw new Error(msg);
+  }
+  return computeDistribution((json.data.search && json.data.search.nodes) || []);
 }
 
 function renderGitLiveControls() {
@@ -617,12 +879,165 @@ async function handleGitLiveRefresh() {
   }
 }
 
+let distributionChartInstance = null;
+
+function ensureDistributionModal() {
+  if (document.getElementById('distribution-overlay')) return;
+  const overlay = document.createElement('div');
+  overlay.id = 'distribution-overlay';
+  overlay.innerHTML = `<div id="distribution-modal">
+    <button id="distribution-close" title="Close">✕</button>
+    <h2>PR Distribution by Team Member</h2>
+    <div id="distribution-status"><div id="distribution-spinner"></div>Loading…</div>
+    <div id="distribution-chart-wrap"><canvas id="distribution-canvas" height="90"></canvas></div>
+  </div>`;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', e => { if (e.target === overlay) closeDistributionModal(); });
+  document.getElementById('distribution-close').addEventListener('click', closeDistributionModal);
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && overlay.classList.contains('open')) closeDistributionModal();
+  });
+}
+
+function closeDistributionModal() {
+  const overlay = document.getElementById('distribution-overlay');
+  if (overlay) overlay.classList.remove('open');
+}
+
+// Fetches team-wide PR data fresh on every click — an on-demand,
+// point-in-time snapshot for the modal only. Deliberately not persisted
+// to the main live-fetch cache (which stays scoped to @me) and never
+// triggered by page load or auto-refresh — only this click handler calls
+// fetchTeamDistribution().
+async function openDistributionModal() {
+  ensureDistributionModal();
+  const overlay = document.getElementById('distribution-overlay');
+  const statusEl = document.getElementById('distribution-status');
+  const chartWrap = document.getElementById('distribution-chart-wrap');
+  overlay.classList.add('open');
+  chartWrap.style.display = 'none';
+  statusEl.style.display = 'block';
+  statusEl.style.color = '#6b7280';
+  // innerHTML (not textContent) here since the spinner div needs to
+  // survive — every other status update below (empty/error) uses plain
+  // textContent, which is fine since those are terminal states with no
+  // spinner.
+  statusEl.innerHTML = '<div id="distribution-spinner"></div>Fetching team PR data…';
+
+  let token = getGithubToken();
+  if (!token) {
+    token = promptForGithubToken();
+    if (!token) { closeDistributionModal(); return; }
+  }
+
+  try {
+    const { users, isBot, reviewedCounts, pendingCounts, createdCounts } = await fetchTeamDistribution(token);
+    if (!users.length) {
+      statusEl.textContent = 'No open PRs found in ' + REPO + '.';
+      return;
+    }
+    statusEl.style.display = 'none';
+    chartWrap.style.display = 'block';
+    const canvas = document.getElementById('distribution-canvas');
+    if (distributionChartInstance) distributionChartInstance.destroy();
+    // Index-aligned with the datasets array below — one source of truth
+    // for "which segment maps to which GitHub search qualifier" so the
+    // click handler can never drift out of sync with the dataset order
+    // (which is exactly the class of bug a hardcoded datasetIndex===1
+    // ternary risked as soon as a 3rd dataset got added).
+    const DATASET_QUALIFIERS = ['reviewed-by', 'review-requested', 'author'];
+    // x-axis text only — marks bots (e.g. "red-hat-konflux 🤖") so their
+    // automated PR volume reads distinctly from human team members rather
+    // than looking like an unfamiliar person. `users` itself (used for
+    // URL-building below) stays as the plain login.
+    const displayLabels = users.map((u, i) => isBot[i] ? `${u} 🤖` : u);
+    distributionChartInstance = new Chart(canvas.getContext('2d'), {
+      type: 'bar',
+      data: {
+        labels: displayLabels,
+        datasets: [
+          { label: '# Reviewed', data: reviewedCounts, backgroundColor: '#60a5fa', categoryPercentage: 0.9, barPercentage: 0.95 },
+          { label: '# Pending Review', data: pendingCounts, backgroundColor: '#f59e0b', categoryPercentage: 0.9, barPercentage: 0.95 },
+          { label: '# Created', data: createdCounts, backgroundColor: '#2dd4bf', categoryPercentage: 0.9, barPercentage: 0.95 }
+        ]
+      },
+      options: {
+        responsive: true,
+        // Fixed pixel height (via the wrapper's CSS height, not an aspect
+        // ratio) so small-count segments get enough real room for their
+        // number + underline — see #distribution-chart-wrap in <style>.
+        maintainAspectRatio: false,
+        // Clicking a segment (the visible number sits right on top of its
+        // own segment, so clicking the number hits the same element)
+        // opens that person's matching GitHub PR search in a new tab —
+        // now an EXACT match, not an approximation, since each segment's
+        // count was computed from exactly one qualifier (see
+        // computeDistribution + DATASET_QUALIFIERS above).
+        onClick: (evt, elements) => {
+          if (!elements.length) return;
+          const { datasetIndex, index } = elements[0];
+          window.open(githubPrSearchUrl(DATASET_QUALIFIERS[datasetIndex], users[index], isBot[index]), '_blank');
+        },
+        onHover: (evt, elements) => {
+          evt.native.target.style.cursor = elements.length ? 'pointer' : 'default';
+        },
+        scales: {
+          x: { stacked: true, ticks: { color: '#d1d5db' }, grid: { color: '#262b36' } },
+          y: { stacked: true, beginAtZero: true, ticks: { color: '#d1d5db', precision: 0 }, grid: { color: '#262b36' }, title: { display: true, text: '# PRs', color: '#9ca3af' } }
+        },
+        plugins: {
+          legend: { labels: { color: '#d1d5db' } },
+          tooltip: { enabled: false },
+          // chartjs-plugin-datalabels (loaded in <head>) — show each
+          // segment's raw count, hide the "0" label on empty segments
+          // (e.g. someone with 3 reviews but 0 created PRs) since a
+          // zero-height segment has no room to render text anyway.
+          datalabels: {
+            color: '#0a0a0a',
+            font: { weight: 'bold' },
+            formatter: v => (v > 0 ? v : '')
+          }
+        }
+      }
+    });
+  } catch (err) {
+    if (err && err.authError) {
+      clearGithubToken();
+      statusEl.textContent = 'Token invalid/expired — close this, click "Set Token" on the main page, and try again.';
+    } else {
+      statusEl.textContent = 'Error: ' + (err && err.message ? err.message : 'fetch failed');
+    }
+    statusEl.style.color = '#ef4444';
+    console.error('[distribution] fetch failed', err);
+  }
+}
+
+function renderChangelogPopover() {
+  const entries = Object.keys(CHANGELOG).map(v =>
+    `<div class="changelog-entry"><div class="changelog-version">v${esc(v)}</div><div class="changelog-desc">${esc(CHANGELOG[v])}</div></div>`
+  ).join('');
+  return `<div id="changelog-popover">${entries}</div>`;
+}
+
+function toggleChangelogPopover(e) {
+  e.stopPropagation();
+  document.getElementById('changelog-popover').classList.toggle('open');
+}
+
+function closeChangelogPopover() {
+  const popover = document.getElementById('changelog-popover');
+  if (popover) popover.classList.remove('open');
+}
+
 function renderPage() {
   const myUser = getMyGithubLogin();
   const titleText = 'A Better Git Dashboard' + (myUser ? ` for <span style="color:${MY_NAME_COLOR};">@${esc(myUser)}</span>` : '');
-  let html = `<h1 style="display:flex;align-items:baseline;justify-content:space-between;">`
+  let html = `<h1 style="display:flex;align-items:baseline;justify-content:space-between;position:relative;">`
     + `<span>${titleText}</span>`
-    + `<span style="font-size:0.5em;font-weight:normal;color:#6b7280;">v${esc(APP_VERSION)}</span>`
+    + `<span style="position:relative;font-size:0.5em;font-weight:normal;">`
+    + `<span id="version-badge" style="color:#6b7280;" title="Click for changelog">v${esc(APP_VERSION)}</span>`
+    + renderChangelogPopover()
+    + `</span>`
     + `</h1>`;
   html += renderGitLiveControls();
   html += `<div id="git-live-content">`;
@@ -648,6 +1063,16 @@ function pruneLocalStorage() {
 function initInteractions(root) {
   root = root || document;
 
+  // Version badge / changelog popover — bind once, same reasoning as the
+  // git-live-controls buttons below (the <h1> is only rendered once).
+  const versionBadge = document.getElementById('version-badge');
+  if (versionBadge && !versionBadge.dataset.bound) {
+    versionBadge.dataset.bound = '1';
+    versionBadge.addEventListener('click', toggleChangelogPopover);
+    document.addEventListener('click', closeChangelogPopover);
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') closeChangelogPopover(); });
+  }
+
   // Git live-fetch controls — bind once; these elements are never
   // recreated on a live refresh (only #git-live-content is replaced).
   const gitRefreshBtn = document.getElementById('git-live-refresh-btn');
@@ -663,6 +1088,15 @@ function initInteractions(root) {
       gitTokenBtn.textContent = '🔑 ' + (getGithubToken() ? 'Change Token' : 'Set Token');
     });
   }
+
+  // Distribution chart button — part of renderPRs()'s output, so it's a
+  // fresh node on every render (initial load and every live refresh);
+  // no dataset.bound guard needed, same as the other root-scoped bindings
+  // below (unlike the git-live-controls buttons above, which persist
+  // across refreshes and do need one).
+  root.querySelectorAll('#pr-distribution-btn').forEach(btn => {
+    btn.addEventListener('click', openDistributionModal);
+  });
 
   // "Only my comments" filter checkboxes (per section, applies to all PRs in table)
   root.querySelectorAll('.my-comments-filter').forEach(cb => {
