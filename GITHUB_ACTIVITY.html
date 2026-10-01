@@ -1,3 +1,10 @@
+<!--
+  A Better Git Dashboard
+  Built by Dave Taylor.
+  Single standalone HTML file — no build step, no server, no dependencies
+  beyond a GitHub token you provide yourself. Free to use, copy, and
+  modify. See the version badge (top right) for a changelog.
+-->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -85,9 +92,9 @@ th .resize-handle:hover, th .resize-handle.active { background: #60a5fa; }
 p { margin: 6px 0; }
 /* PR comment sub-rows */
 tr.pr-comments td { background: #0d0d1a; border-top: none; padding: 3px 10px 6px 10px; font-size: 11px; color: #9ca3af; line-height: 1.4; }
-.pr-comments-toggle { background: rgba(165, 180, 252, 0.12); border: 1px solid rgba(165, 180, 252, 0.3); color: #a5b4fc; font-size: 11px; padding: 3px 10px; border-radius: 3px; cursor: pointer; margin-left: 10px; vertical-align: middle; }
+.pr-comments-toggle { background: transparent; border: 1px solid rgba(165, 180, 252, 0.3); color: #a5b4fc; font-size: 12px; padding: 5px 14px; border-radius: 14px; cursor: pointer; margin-left: 10px; vertical-align: middle; }
 .pr-comments-toggle:hover { background: rgba(165, 180, 252, 0.2); }
-.draft-toggle { background: rgba(165, 180, 252, 0.12); border: 1px solid rgba(165, 180, 252, 0.3); color: #a5b4fc; font-size: 11px; padding: 3px 10px; border-radius: 3px; cursor: pointer; margin-left: 6px; vertical-align: middle; }
+.draft-toggle { background: transparent; border: 1px solid rgba(165, 180, 252, 0.3); color: #a5b4fc; font-size: 12px; padding: 5px 14px; border-radius: 14px; cursor: pointer; margin-left: 6px; vertical-align: middle; }
 .draft-toggle:hover { background: rgba(165, 180, 252, 0.2); }
 /* Draft PRs hidden by default; "Show Draft PRs" removes .hide-drafts from
    the table. The adjacent-sibling selector hides a draft row's comment
@@ -95,17 +102,51 @@ tr.pr-comments td { background: #0d0d1a; border-top: none; padding: 3px 10px 6px
 table.hide-drafts tr.pr-draft-row,
 table.hide-drafts tr.pr-draft-row + tr.pr-comments { display: none; }
 
-.focus-mode-toggle { background: rgba(134, 239, 172, 0.12); border: 1px solid rgba(134, 239, 172, 0.3); color: #86efac; font-size: 11px; padding: 3px 10px; border-radius: 3px; cursor: pointer; margin-left: 6px; vertical-align: middle; }
+.focus-mode-toggle { background: transparent; border: 1px solid rgba(134, 239, 172, 0.3); color: #86efac; font-size: 12px; padding: 5px 14px; border-radius: 14px; cursor: pointer; margin-left: 6px; vertical-align: middle; position: relative; }
 .focus-mode-toggle:hover { background: rgba(134, 239, 172, 0.2); }
-.focus-mode-toggle.active { background: rgba(134, 239, 172, 0.35); }
+/* Custom tooltip (not the native title attribute) — native tooltips have
+   a browser-controlled reveal delay that can't be shortened via CSS; this
+   shows the instant :hover applies, with only a quick fade transition. */
+.focus-mode-toggle[data-tooltip]::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: 130%;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #1a1a1a;
+  border: 1px solid #333;
+  color: #d1d5db;
+  font-size: 11px;
+  font-weight: normal;
+  padding: 6px 10px;
+  border-radius: 4px;
+  white-space: normal;
+  width: 220px;
+  text-align: center;
+  line-height: 1.4;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.1s;
+  z-index: 10;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+}
+.focus-mode-toggle[data-tooltip]:hover::after { opacity: 1; visibility: visible; }
+/* Active state needs to stay visually distinct even with a transparent
+   resting background — a brighter/thicker border + bold text carries that
+   instead of a filled background. */
+.focus-mode-toggle.active { background: transparent; border: 2px solid #86efac; font-weight: 700; }
 /* Focus Mode hides every row except PRs I authored or where I'm waiting
    to review — same adjacent-sibling pattern as .hide-drafts above so a
    hidden row's comment sub-row disappears with it. */
 table.focus-mode tr.pr-not-focus,
 table.focus-mode tr.pr-not-focus + tr.pr-comments { display: none; }
 
-.git-live-btn { background: rgba(165, 180, 252, 0.12); border: 1px solid rgba(165, 180, 252, 0.3); color: #a5b4fc; font-size: 12px; padding: 4px 12px; border-radius: 3px; cursor: pointer; margin-right: 6px; }
+.git-live-btn { background: transparent; border: 1px solid rgba(165, 180, 252, 0.3); color: #a5b4fc; font-size: 13px; padding: 6px 16px; border-radius: 14px; cursor: pointer; margin-right: 6px; }
 .git-live-btn:hover { background: rgba(165, 180, 252, 0.2); }
+/* Refresh specifically — slightly smaller than the shared .git-live-btn
+   sizing (which the Settings Save button also uses, left unchanged). */
+#git-live-refresh-btn { font-size: 12px; padding: 4px 12px; }
 
 .unread-badge { background: #ef4444; color: #fff; font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 9px; margin-left: 6px; vertical-align: middle; letter-spacing: 0.2px; }
 
@@ -125,7 +166,7 @@ table.focus-mode tr.pr-not-focus + tr.pr-comments { display: none; }
 .comment-body a { color: #60a5fa; }
 .comment-body hr { border: none; border-top: 1px solid #262b36; margin: 6px 0; }
 
-.pr-distribution-btn { background: rgba(165, 180, 252, 0.12); border: 1px solid rgba(165, 180, 252, 0.3); color: #a5b4fc; font-size: 11px; padding: 3px 10px; border-radius: 3px; cursor: pointer; white-space: nowrap; }
+.pr-distribution-btn { background: transparent; border: 1px solid rgba(165, 180, 252, 0.3); color: #a5b4fc; font-size: 12px; padding: 5px 14px; border-radius: 14px; cursor: pointer; white-space: nowrap; }
 .pr-distribution-btn:hover { background: rgba(165, 180, 252, 0.2); }
 
 /* Distribution chart modal */
@@ -138,6 +179,20 @@ table.focus-mode tr.pr-not-focus + tr.pr-comments { display: none; }
 #distribution-status { color: #6b7280; font-size: 13px; padding: 40px 0; text-align: center; }
 #distribution-spinner { width: 28px; height: 28px; border: 3px solid #262b36; border-top-color: #a5b4fc; border-radius: 50%; margin: 0 auto 12px auto; animation: distribution-spin 0.8s linear infinite; }
 @keyframes distribution-spin { to { transform: rotate(360deg); } }
+
+#settings-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 1000; align-items: center; justify-content: center; }
+#settings-overlay.open { display: flex; }
+#settings-modal { background: #111; border: 1px solid #333; border-radius: 6px; padding: 20px; width: min(90vw, 420px); position: relative; }
+#settings-modal h2 { font-size: 1.1em; color: #a5b4fc; margin-bottom: 4px; }
+#settings-close { position: absolute; top: 14px; right: 16px; background: none; border: none; color: #9ca3af; font-size: 20px; cursor: pointer; line-height: 1; }
+#settings-close:hover { color: #e5e7eb; }
+.settings-label { display: block; font-size: 12px; color: #9ca3af; margin: 12px 0 4px; }
+#settings-repo-input, #settings-token-input { width: 100%; background: #0d0d1a; border: 1px solid #333; color: #e5e7eb; padding: 6px 8px; border-radius: 3px; font-size: 13px; }
+#settings-repo-input:focus, #settings-token-input:focus { outline: 1px solid #a5b4fc; }
+#settings-hint { font-size: 11px; color: #6b7280; margin-top: 10px; line-height: 1.4; }
+#settings-status { font-size: 12px; margin-top: 8px; min-height: 14px; }
+#settings-modal .git-live-btn { margin-top: 14px; }
+#settings-credit { font-size: 11px; color: #4b5563; margin-top: 14px; text-align: center; }
 
 #version-badge { cursor: pointer; }
 #version-badge:hover { color: #a5b4fc; text-decoration: underline; }
@@ -219,17 +274,18 @@ if (typeof Chart !== 'undefined' && typeof ChartDataLabels !== 'undefined') {
 
 const D = { prs: [], pr_status: {} };
 const JIRA = 'https://redhat.atlassian.net/browse/';
-const GH = 'https://github.com/RedHatInsights/uhc-portal/pull/';
 // Bump this at significant milestones (new features, breaking layout/data
 // changes) — shown in the masthead so anyone using a sent-around copy of
 // this file can tell at a glance if they're on an old version.
-const APP_VERSION = '1.5';
+const APP_VERSION = '1.7';
 // Short (1-2 sentence) human-written summary of each version, shown in a
 // popover when the version badge is clicked. This can't be generated from
 // git at runtime — a standalone HTML file opened by a coworker has no repo
 // or git access at all — so it's manually curated here each time
 // APP_VERSION is bumped. Newest first.
 const CHANGELOG = {
+  '1.7': 'UX styling changes, incl. showing your full name (when GitHub has one on file) in the header title and the Distribution chart.',
+  '1.6': 'Replaced the token popup with a Settings modal (⚙ icon) that also lets you point this dashboard at any repo. Focus Mode now also shows PRs with unread comments.',
   '1.5': 'Pinned all 4 CDN scripts to exact versions with integrity hashes, so a compromised CDN can no longer silently run altered code in this page.',
   '1.4': 'Added a "Focus Mode" button — filters the PR table down to just PRs you authored or are waiting for your review.',
   '1.3': 'Shows a "tested-by-all" tag under the author when a PR has that GitHub label — the closest signal we have to a Jira QA Contact assignment.',
@@ -238,7 +294,9 @@ const CHANGELOG = {
   '1.0': 'Initial single page git dashboard. Live-fetches your open, reviewing, and approved PRs into one table via the GitHub API. Includes per-PR comment threads and a "my comments" filter. Fully self-contained — works for anyone with their own GitHub token, no build step or server needed.'
 };
 
-function ghLink(n) { return `<a href="${GH}${n}">#${n}</a>`; }
+// Derived from REPO (not a fixed string) so switching repos via Settings
+// immediately changes where every PR link points — see REPO below.
+function ghLink(n) { return `<a href="https://github.com/${REPO}/pull/${n}">#${n}</a>`; }
 // Used by the Distribution chart's segment clicks. GitHub search does NOT
 // support ORing different qualifiers together (verified live: "author:X OR
 // review-requested:X" returns 0 hits even when each alone has results).
@@ -266,6 +324,9 @@ function esc(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').repl
 // by review/check states (approved/failing/pending/dismissed) elsewhere in
 // this file, so reusing one here would make it ambiguous at a glance.
 const MY_NAME_COLOR = '#c084fc';
+// Shared between the Focus Mode button's initial render and its toggle
+// handler (see initInteractions) so the two can never drift out of sync.
+const FOCUS_MODE_TOOLTIP = 'Shows only PRs you authored, are waiting for your review, or have unread comments';
 function highlightIfMe(name, myUser) {
   return name === myUser ? `<span style="color:${MY_NAME_COLOR};">${esc(name)}</span>` : esc(name);
 }
@@ -368,7 +429,7 @@ function renderPRs() {
   const allPRs = myPRs.concat(otherRelevant).sort(byPrNumberAsc);
 
   if (!allPRs.length) {
-    return `<h3>PRs</h3><div style="color:#6b7280;">No open PRs.</div>`;
+    return `<h3>My PRs</h3><div style="color:#6b7280;">No open PRs.</div>`;
   }
 
   const draftCount = allPRs.reduce((n, pr) => {
@@ -376,14 +437,14 @@ function renderPRs() {
     return n + (st && st.draft ? 1 : 0);
   }, 0);
 
-  let html = `<h3 style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;"><span>PRs`;
+  let html = `<h3 style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;"><span>My PRs`;
   if (draftCount) {
     html += ` <button class="draft-toggle" data-draft-table="prs-table">Show Draft PRs (${draftCount})</button>`;
   }
   html += ` <button class="pr-comments-toggle" data-table="prs-table">Expand All Comments</button>`;
-  html += ` <button class="focus-mode-toggle" data-table="prs-table">Focus Mode</button>`;
-  html += ` <label style="font-weight:normal;font-size:12px;cursor:pointer;margin-left:6px;"><input type="checkbox" class="my-comments-filter" data-table="prs-table" style="vertical-align:middle;margin-right:3px;">Show only my comments</label></span>`;
-  html += `<button id="pr-distribution-btn" class="pr-distribution-btn" title="Team PR distribution">📊 Distribution</button>`;
+  html += ` <label style="font-weight:normal;font-size:12px;cursor:pointer;margin-left:6px;"><input type="checkbox" class="my-comments-filter" data-table="prs-table" style="vertical-align:middle;margin-right:3px;">Show only my comments</label>`;
+  html += ` <button class="focus-mode-toggle" data-table="prs-table" data-tooltip="${esc(FOCUS_MODE_TOOLTIP)}">Focus Mode</button></span>`;
+  html += `<button id="pr-distribution-btn" class="pr-distribution-btn" title="Team PR distribution">📊 PR Distribution</button>`;
   html += `</h3>`;
   html += renderPRTable(allPRs, 'prs-table', myUser);
 
@@ -420,25 +481,30 @@ function renderPRTable(prs, tableId, myUser) {
     const commitLine = st.lastCommitAt
       ? `<br><span style="color:#6b7280;font-size:11px;">code changed: ${formatRelativeAge(st.lastCommitAt)}</span>`
       : '';
-    // Focus Mode relevance: PRs I authored, or PRs where I'm currently
-    // waiting to review (pending — not already approved/commented/etc.).
-    // Rows failing this get tagged .pr-not-focus, hidden only once Focus
-    // Mode is toggled on (see CSS) — independent of the draft-row class.
+    // Computed up front (not just inside the comments sub-row block below)
+    // because Focus Mode's eligibility check needs unreadCount too.
+    const comments = (pr.comments || []).slice().sort((a, b) => (b.when || '').localeCompare(a.when || ''));
+    const seenUpTo = getCommentSeenUpTo(pr.number);
+    const unreadCount = comments.filter(c => (c.when || '') > seenUpTo).length;
+    // Focus Mode relevance: PRs I authored, PRs where I'm currently
+    // waiting to review (pending — not already approved/commented/etc.),
+    // or ANY PR with unread comments — someone could've commented on a PR
+    // I already approved, and that still needs my attention. Rows failing
+    // this get tagged .pr-not-focus, hidden only once Focus Mode is
+    // toggled on (see CSS) — independent of the draft-row class.
     const isMine = pr.author === myUser;
     const isPendingMine = (st.reviewers || []).some(r => r.user === myUser && r.state === 'pending');
-    const focusClass = (isMine || isPendingMine) ? '' : 'pr-not-focus';
+    const hasUnread = unreadCount > 0;
+    const focusClass = (isMine || isPendingMine || hasUnread) ? '' : 'pr-not-focus';
     const rowClass = [st.draft && 'pr-draft-row', focusClass].filter(Boolean).join(' ');
     // data-sort-value: displayed text ("14 days ago", "Yesterday") doesn't
     // sort correctly as a string — sortTable() prefers this raw value when
     // present. PR numbers have the same problem ("#9" vs "#10" as text).
     html += `<tr${rowClass ? ` class="${rowClass}"` : ''}><td class="nowrap" data-sort-value="${pr.number}">${ghLink(pr.number)}</td><td>${esc(titleDisplay)}${commitLine}</td><td>${authorHtml}</td><td>${reviewHtml}</td><td class="nowrap">${statusHtml}</td><td class="nowrap" data-sort-value="${esc(createdRaw)}">${createdAge}</td></tr>`;
-    const comments = (pr.comments || []).slice().sort((a, b) => (b.when || '').localeCompare(a.when || ''));
     if (comments.length) {
       html += `<tr class="pr-comments"><td></td><td colspan="5">`;
       const pageSize = 10;
       const detailId = `comments-${tableId}-${pr.number}`;
-      const seenUpTo = getCommentSeenUpTo(pr.number);
-      const unreadCount = comments.filter(c => (c.when || '') > seenUpTo).length;
       const unreadBadge = unreadCount > 0 ? ` <span class="unread-badge">${unreadCount} new</span>` : '';
       // comments[0] is the newest (sorted above) — same "latest of what's
       // currently visible" concept the filter handler recomputes below.
@@ -459,7 +525,7 @@ function renderPRTable(prs, tableId, myUser) {
       });
       html += `</tbody></table>`;
       if (comments.length > pageSize) {
-        html += `<button class="load-more-comments" data-target="${detailId}" data-page-size="${pageSize}" style="margin:6px 0;background:rgba(165,180,252,0.12);border:1px solid rgba(165,180,252,0.3);color:#a5b4fc;font-size:11px;padding:3px 10px;border-radius:3px;cursor:pointer;">Load more (${comments.length - pageSize} remaining)</button>`;
+        html += `<button class="load-more-comments" data-target="${detailId}" data-page-size="${pageSize}" style="margin:6px 0;background:transparent;border:1px solid rgba(165,180,252,0.3);color:#a5b4fc;font-size:12px;padding:5px 14px;border-radius:14px;cursor:pointer;">Load more (${comments.length - pageSize} remaining)</button>`;
       }
       html += `</details>`;
       html += `</td></tr>`;
@@ -505,15 +571,29 @@ function renderMergeStatus(state) {
 
 // ============================================================
 // LIVE GITHUB DATA — this file's only data source. Triggered manually via
-// the "Refresh Git Data (Live)" button; a GitHub GraphQL fetch using a
-// token entered once (see promptForGithubToken below). No server, no
-// seed file, no gather.sh/assemble.py — this replaces what a prior
-// version of this dashboard fetched server-side for the GitHub portion.
+// the "Refresh" button; a GitHub GraphQL fetch using a
+// token entered once (see the Settings modal, openSettingsModal below). No
+// server, no seed file, no gather.sh/assemble.py — this replaces what a
+// prior version of this dashboard fetched server-side for the GitHub
+// portion.
 // ============================================================
 
 const GH_TOKEN_KEY = 'activity_monitor_gh_token';
 const GIT_LIVE_CACHE_KEY = 'git_live_data_cache';
-const REPO = 'RedHatInsights/uhc-portal';
+// REPO is deliberately `let`, not `const` — it's user-editable via the
+// Settings modal (⚙ icon next to the version number) so this dashboard can
+// point at ANY owner/repo, not just the one it was originally built for.
+// Persisted in localStorage (not sensitive, unlike the token) so it's
+// remembered across sessions on this device. Every ${REPO} usage below
+// reads this variable live, so changing it takes effect immediately.
+const REPO_KEY = 'activity_monitor_repo';
+const DEFAULT_REPO = 'RedHatInsights/uhc-portal';
+let REPO = localStorage.getItem(REPO_KEY) || DEFAULT_REPO;
+function setRepo(value) {
+  const trimmed = (value || '').trim();
+  REPO = trimmed || DEFAULT_REPO;
+  localStorage.setItem(REPO_KEY, REPO);
+}
 
 // D.prs/D.pr_status are populated exclusively from a live GraphQL fetch,
 // cached here so a page reload doesn't force a re-fetch.
@@ -536,6 +616,16 @@ const MY_LOGIN_KEY = 'activity_monitor_gh_login';
 function getMyGithubLogin() { return localStorage.getItem(MY_LOGIN_KEY) || ''; }
 function setMyGithubLogin(login) { localStorage.setItem(MY_LOGIN_KEY, login); }
 
+// Same idea as MY_LOGIN_KEY, but for the viewer's profile display name
+// (GitHub's optional "name" field) — used only for the header title, which
+// falls back to the login when a name isn't set (see renderPage).
+const MY_NAME_KEY = 'activity_monitor_gh_name';
+function getMyGithubName() { return localStorage.getItem(MY_NAME_KEY) || ''; }
+function setMyGithubName(name) {
+  if (name) localStorage.setItem(MY_NAME_KEY, name);
+  else localStorage.removeItem(MY_NAME_KEY);
+}
+
 // Bot filter — applied to both comments and reviewers. (The old Python code
 // had two different lists here by historical accident; unified into one.)
 const BOT_USERS = new Set(['codecov[bot]', 'coderabbitai[bot]', 'github-actions[bot]', 'dependabot[bot]', 'codecov', 'coderabbitai', 'sourcery-ai[bot]', 'sourcery-ai']);
@@ -547,10 +637,76 @@ const BOT_USERS = new Set(['codecov[bot]', 'coderabbitai[bot]', 'github-actions[
 function getGithubToken() { return sessionStorage.getItem(GH_TOKEN_KEY) || ''; }
 function setGithubToken(t) { sessionStorage.setItem(GH_TOKEN_KEY, t); }
 function clearGithubToken() { sessionStorage.removeItem(GH_TOKEN_KEY); }
-function promptForGithubToken() {
-  const t = window.prompt('Enter a GitHub Personal Access Token (needs read access to pull requests/checks on ' + REPO + ').\nUse a fine-grained, read-only, single-repo token if possible.\nStored only in this browser tab\'s sessionStorage (cleared when the tab closes); sent only to api.github.com.');
-  if (t && t.trim()) { setGithubToken(t.trim()); return t.trim(); }
-  return '';
+
+// Settings modal (Repo + GitHub Token) — replaces an older window.prompt()
+// based flow entirely. Two reasons: (1) native prompt()/alert()/confirm()
+// dialogs triggered programmatically (e.g. by the page-load auto-fetch,
+// with no direct click) get throttled by the browser after repeated calls
+// — Chrome adds its own "Don't show this again" checkbox and eventually
+// blocks the dialog outright, which a page can't opt out of while still
+// using prompt(). A custom modal isn't a native dialog, so it's never
+// subject to that. (2) it also needed a 2nd field once Repo became
+// user-editable — prompt() has no way to collect two separate inputs.
+function ensureSettingsModal() {
+  if (document.getElementById('settings-overlay')) return;
+  const overlay = document.createElement('div');
+  overlay.id = 'settings-overlay';
+  overlay.innerHTML = `<div id="settings-modal">
+    <button id="settings-close" title="Close">✕</button>
+    <h2>Settings</h2>
+    <label class="settings-label" for="settings-repo-input">Repo (owner/name)</label>
+    <input id="settings-repo-input" type="text" placeholder="${esc(DEFAULT_REPO)}" autocomplete="off" spellcheck="false">
+    <label class="settings-label" for="settings-token-input">GitHub Personal Access Token</label>
+    <input id="settings-token-input" type="password" placeholder="ghp_…" autocomplete="off" spellcheck="false">
+    <div id="settings-hint">Use a fine-grained, read-only, single-repo token if possible — needs read access to pull requests/checks on the repo above. Token lives only in this browser tab's sessionStorage (cleared when the tab closes) and is sent only to api.github.com. Repo is remembered on this device.</div>
+    <div id="settings-status"></div>
+    <button id="settings-save-btn" class="git-live-btn">Save</button>
+    <div id="settings-credit">Built by Dave Taylor — free to use, copy, and modify.</div>
+  </div>`;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', e => { if (e.target === overlay) closeSettingsModal(); });
+  document.getElementById('settings-close').addEventListener('click', closeSettingsModal);
+  document.getElementById('settings-save-btn').addEventListener('click', saveSettings);
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && overlay.classList.contains('open')) closeSettingsModal();
+  });
+}
+
+function openSettingsModal(statusMessage) {
+  ensureSettingsModal();
+  document.getElementById('settings-repo-input').value = REPO;
+  document.getElementById('settings-token-input').value = getGithubToken();
+  const statusEl = document.getElementById('settings-status');
+  statusEl.textContent = statusMessage || '';
+  statusEl.style.color = '#f59e0b';
+  document.getElementById('settings-overlay').classList.add('open');
+}
+
+function closeSettingsModal() {
+  const overlay = document.getElementById('settings-overlay');
+  if (overlay) overlay.classList.remove('open');
+}
+
+function saveSettings() {
+  const repoInput = document.getElementById('settings-repo-input').value.trim();
+  const tokenInput = document.getElementById('settings-token-input').value.trim();
+  const repoChanged = !!repoInput && repoInput !== REPO;
+
+  if (tokenInput) setGithubToken(tokenInput); else clearGithubToken();
+
+  if (repoChanged) {
+    setRepo(repoInput);
+    // The PR cache was fetched for the OLD repo — stale and wrong for the
+    // new one, so it must be dropped rather than briefly shown under the
+    // new REPO before the next refresh overwrites it.
+    localStorage.removeItem(GIT_LIVE_CACHE_KEY);
+    D.prs = [];
+    D.pr_status = {};
+  }
+
+  closeSettingsModal();
+  renderPage();
+  if (getGithubToken()) handleGitLiveRefresh();
 }
 
 // Reviewer state is the raw GitHub API value — each reviewer's latest
@@ -617,7 +773,7 @@ function buildLiveQuery() {
   const q = (extra) => `repo:${REPO} is:pr is:open ${extra}`;
   const alias = (name, searchQ) => `${name}: search(query: ${JSON.stringify(q(searchQ))}, type: ISSUE, first: 30) { nodes { ... on PullRequest { ${PR_FRAGMENT} } } }`;
   return `query {
-    viewer { login }
+    viewer { login name }
     ${alias('authored', 'author:@me')}
     ${alias('requested', 'user-review-requested:@me')}
     ${alias('stale', 'reviewed-by:@me -review:approved -author:@me')}
@@ -742,6 +898,7 @@ async function fetchLiveGitData(token) {
   }
   const githubUser = json.data.viewer.login;
   setMyGithubLogin(githubUser);
+  setMyGithubName(json.data.viewer.name || '');
   return buildLivePrData(json.data, githubUser);
 }
 
@@ -758,9 +915,9 @@ async function fetchLiveGitData(token) {
 // manually-maintained string list keeps missing.
 const TEAM_PR_FRAGMENT = `
   number
-  author { __typename login }
-  reviews(first: 50) { nodes { state author { __typename login } } }
-  reviewRequests(first: 20) { nodes { requestedReviewer { __typename ... on User { login } ... on Bot { login } } } }
+  author { __typename login ... on User { name } }
+  reviews(first: 50) { nodes { state author { __typename login ... on User { name } } } }
+  reviewRequests(first: 20) { nodes { requestedReviewer { __typename ... on User { login name } ... on Bot { login } } } }
 `;
 
 function buildTeamDistributionQuery() {
@@ -809,15 +966,28 @@ function computeDistribution(prNodes) {
   // possible in principle) won't get this prefix — GitHub's plain-login
   // form is what's needed for those instead.
   const botLogins = new Set();
+  // login -> profile display name, for the chart's x-axis labels only —
+  // GitHub's "name" field is optional and often unset, so this is sparse
+  // by design; openDistributionModal() falls back to the login itself
+  // wherever a person has no entry here. The login remains the one true
+  // identity key everywhere else (counting, URL building) since it's
+  // what GitHub search qualifiers require and names aren't guaranteed
+  // unique anyway.
+  const displayNames = {};
+  const noteDisplayName = actor => {
+    if (actor && actor.login && actor.name) displayNames[actor.login] = actor.name;
+  };
   for (const node of prNodes) {
     const authorLogin = node.author ? node.author.login : '';
     if (node.author && node.author.__typename === 'Bot') botLogins.add(authorLogin);
+    noteDisplayName(node.author);
     if (authorLogin) {
       createdCount[authorLogin] = (createdCount[authorLogin] || 0) + 1;
     }
     const reviews = (node.reviews.nodes || [])
       .filter(r => !isBotActor(r.author))
       .map(r => ({ state: r.state, user: r.author ? r.author.login : '' }));
+    (node.reviews.nodes || []).forEach(r => noteDisplayName(r.author));
     // A PR's requested reviewer can be a whole GitHub Team (e.g.
     // "uhc-portal-senior-staff") rather than an individual — a repo
     // Action auto-assigns one specific team member as an individual
@@ -828,11 +998,11 @@ function computeDistribution(prNodes) {
     // assignment) — counting it too would double-count the same
     // work-item, and the couple of older PRs predating the Action just
     // stay uncounted rather than attributed to anyone.
-    const requestedLogins = (node.reviewRequests.nodes || [])
+    const requestedReviewers = (node.reviewRequests.nodes || [])
       .map(rr => rr.requestedReviewer)
-      .filter(rev => rev && rev.__typename !== 'Team' && !isBotActor(rev))
-      .map(rev => rev.login)
-      .filter(Boolean);
+      .filter(rev => rev && rev.__typename !== 'Team' && !isBotActor(rev));
+    requestedReviewers.forEach(noteDisplayName);
+    const requestedLogins = requestedReviewers.map(rev => rev.login).filter(Boolean);
     const reviewers = simplifyReviewers(reviews, authorLogin, requestedLogins);
     for (const r of reviewers) {
       const bucket = r.state === 'pending' ? pendingCount : reviewedCount;
@@ -849,6 +1019,7 @@ function computeDistribution(prNodes) {
   return {
     users: roster,
     isBot: roster.map(u => botLogins.has(u)),
+    displayNames: roster.map(u => displayNames[u] || u),
     reviewedCounts: roster.map(u => reviewedCount[u] || 0),
     pendingCounts: roster.map(u => pendingCount[u] || 0),
     createdCounts: roster.map(u => createdCount[u] || 0)
@@ -877,15 +1048,12 @@ async function fetchTeamDistribution(token) {
 }
 
 function renderGitLiveControls() {
-  const token = getGithubToken();
-  const tokenLabel = token ? 'Change Token' : 'Set Token';
   const cached = getGitLiveCache();
   const initialStatus = cached && cached.fetchedAt
     ? `Last fetched: ${new Date(cached.fetchedAt).toLocaleString()} (cached)`
     : 'Not yet fetched — click Refresh';
   return `<div id="git-live-controls" style="margin:8px 0 4px 0;">
-    <button id="git-live-refresh-btn" class="git-live-btn">🔄 Refresh Git Data (Live)</button>
-    <button id="git-live-token-btn" class="git-live-btn">🔑 ${tokenLabel}</button>
+    <button id="git-live-refresh-btn" class="git-live-btn">🔄 Refresh</button>
     <span id="git-live-status" style="margin-left:4px;font-size:12px;color:#6b7280;">${initialStatus}</span>
   </div>`;
 }
@@ -893,7 +1061,7 @@ function renderGitLiveControls() {
 function renderGitEmptyState() {
   return `<div style="color:#6b7280;padding:24px 4px;">
     <p>No live GitHub data loaded yet — this tab is fetched directly from the GitHub API.</p>
-    <p style="font-size:12px;margin-top:6px;">Click <strong style="color:#a5b4fc;">"🔄 Refresh Git Data (Live)"</strong> above to load your PRs.</p>
+    <p style="font-size:12px;margin-top:6px;">Click <strong style="color:#a5b4fc;">"🔄 Refresh"</strong> above to load your PRs.</p>
   </div>`;
 }
 
@@ -911,10 +1079,10 @@ function renderGitTabContent() {
 
 async function handleGitLiveRefresh() {
   const statusEl = document.getElementById('git-live-status');
-  let token = getGithubToken();
+  const token = getGithubToken();
   if (!token) {
-    token = promptForGithubToken();
-    if (!token) return;
+    openSettingsModal('Enter a GitHub token above, then Save to fetch PRs.');
+    return;
   }
   statusEl.textContent = 'Fetching live data…';
   statusEl.style.color = '#f59e0b';
@@ -925,14 +1093,12 @@ async function handleGitLiveRefresh() {
     setGitLiveCache(prsList, prStatus);
     document.getElementById('git-live-content').innerHTML = renderPRs();
     initInteractions(document.getElementById('git-live-content'));
-    statusEl.textContent = `Live data fetched at ${new Date().toLocaleTimeString()}`;
+    statusEl.textContent = `Last refreshed at ${new Date().toLocaleTimeString()}`;
     statusEl.style.color = '#22c55e';
   } catch (err) {
     if (err && err.authError) {
       clearGithubToken();
-      const tokenBtn = document.getElementById('git-live-token-btn');
-      if (tokenBtn) tokenBtn.textContent = '🔑 Set Token';
-      statusEl.textContent = 'Token invalid/expired — click "Set Token" and try again.';
+      statusEl.textContent = 'Token invalid/expired — click the ⚙ Settings icon to re-enter it.';
     } else {
       statusEl.textContent = 'Error: ' + (err && err.message ? err.message : 'fetch failed');
     }
@@ -949,7 +1115,7 @@ function ensureDistributionModal() {
   overlay.id = 'distribution-overlay';
   overlay.innerHTML = `<div id="distribution-modal">
     <button id="distribution-close" title="Close">✕</button>
-    <h2>PR Distribution by Team Member</h2>
+    <h2 id="distribution-title">PR Distribution by Contributors</h2>
     <div id="distribution-status"><div id="distribution-spinner"></div>Loading…</div>
     <div id="distribution-chart-wrap"><canvas id="distribution-canvas" height="90"></canvas></div>
     <div id="distribution-footnote">* "# Reviewed" = your latest formal review per PR (Approved, Changes Requested, or Commented-via-review) — plain PR comments outside a review don't count.</div>
@@ -978,6 +1144,10 @@ async function openDistributionModal() {
   const statusEl = document.getElementById('distribution-status');
   const chartWrap = document.getElementById('distribution-chart-wrap');
   overlay.classList.add('open');
+  // Set on every open (not baked into the one-time ensureDistributionModal
+  // markup above) since REPO can change via Settings after this modal's
+  // DOM already exists.
+  document.getElementById('distribution-title').textContent = `PR Distribution by ${REPO} Contributors`;
   chartWrap.style.display = 'none';
   document.getElementById('distribution-footnote').style.display = 'none';
   statusEl.style.display = 'block';
@@ -988,14 +1158,15 @@ async function openDistributionModal() {
   // spinner.
   statusEl.innerHTML = '<div id="distribution-spinner"></div>Fetching team PR data…';
 
-  let token = getGithubToken();
+  const token = getGithubToken();
   if (!token) {
-    token = promptForGithubToken();
-    if (!token) { closeDistributionModal(); return; }
+    closeDistributionModal();
+    openSettingsModal('Enter a GitHub token above, then Save and click Distribution again.');
+    return;
   }
 
   try {
-    const { users, isBot, reviewedCounts, pendingCounts, createdCounts } = await fetchTeamDistribution(token);
+    const { users, isBot, displayNames, reviewedCounts, pendingCounts, createdCounts } = await fetchTeamDistribution(token);
     if (!users.length) {
       statusEl.textContent = 'No open PRs found in ' + REPO + '.';
       return;
@@ -1015,7 +1186,11 @@ async function openDistributionModal() {
     // automated PR volume reads distinctly from human team members rather
     // than looking like an unfamiliar person. `users` itself (used for
     // URL-building below) stays as the plain login.
-    const displayLabels = users.map((u, i) => isBot[i] ? `${u} 🤖` : u);
+    // Full profile name when GitHub has one on file, falling back to the
+    // login otherwise (see displayNames in computeDistribution) — bots
+    // generally have no "name" set, so they naturally fall back to login
+    // + the 🤖 marker below regardless.
+    const displayLabels = users.map((u, i) => isBot[i] ? `${displayNames[i]} 🤖` : displayNames[i]);
     distributionChartInstance = new Chart(canvas.getContext('2d'), {
       type: 'bar',
       data: {
@@ -1068,7 +1243,7 @@ async function openDistributionModal() {
   } catch (err) {
     if (err && err.authError) {
       clearGithubToken();
-      statusEl.textContent = 'Token invalid/expired — close this, click "Set Token" on the main page, and try again.';
+      statusEl.textContent = 'Token invalid/expired — close this and click the ⚙ Settings icon to re-enter it.';
     } else {
       statusEl.textContent = 'Error: ' + (err && err.message ? err.message : 'fetch failed');
     }
@@ -1096,11 +1271,17 @@ function closeChangelogPopover() {
 
 function renderPage() {
   const myUser = getMyGithubLogin();
-  const titleText = 'A Better Git Dashboard' + (myUser ? ` for <span style="color:${MY_NAME_COLOR};">@${esc(myUser)}</span>` : '');
+  // Full profile name when GitHub has one on file for this token's owner,
+  // falling back to "@login" otherwise — same fallback rule as the
+  // Distribution chart's displayNames (see computeDistribution).
+  const myName = getMyGithubName();
+  const myDisplay = myName ? esc(myName) : (myUser ? `@${esc(myUser)}` : '');
+  const titleText = 'A Better Git Dashboard' + (myDisplay ? ` for <span style="color:${MY_NAME_COLOR};">${myDisplay}</span>` : '');
   let html = `<h1 style="display:flex;align-items:baseline;justify-content:space-between;position:relative;">`
     + `<span>${titleText}</span>`
     + `<span style="position:relative;font-size:0.5em;font-weight:normal;">`
     + `<span id="version-badge" style="color:#6b7280;" title="Click for changelog">v${esc(APP_VERSION)}</span>`
+    + ` <span id="token-gear-btn" style="cursor:pointer;" title="Settings (repo &amp; GitHub token)">⚙️</span>`
     + renderChangelogPopover()
     + `</span>`
     + `</h1>`;
@@ -1145,12 +1326,15 @@ function initInteractions(root) {
     gitRefreshBtn.dataset.bound = '1';
     gitRefreshBtn.addEventListener('click', handleGitLiveRefresh);
   }
-  const gitTokenBtn = document.getElementById('git-live-token-btn');
-  if (gitTokenBtn && !gitTokenBtn.dataset.bound) {
-    gitTokenBtn.dataset.bound = '1';
-    gitTokenBtn.addEventListener('click', () => {
-      promptForGithubToken();
-      gitTokenBtn.textContent = '🔑 ' + (getGithubToken() ? 'Change Token' : 'Set Token');
+  // Gear icon next to the version badge — opens the Settings modal (repo +
+  // token). Bound once like version-badge above (the <h1> is only
+  // rendered once).
+  const tokenGearBtn = document.getElementById('token-gear-btn');
+  if (tokenGearBtn && !tokenGearBtn.dataset.bound) {
+    tokenGearBtn.dataset.bound = '1';
+    tokenGearBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      openSettingsModal();
     });
   }
 
@@ -1307,7 +1491,16 @@ function initInteractions(root) {
       if (!table) return;
       const active = table.classList.toggle('focus-mode');
       btn.classList.toggle('active', active);
-      btn.textContent = active ? 'Show All PRs' : 'Focus Mode';
+      // "Exit Focus Mode" (not "Show All PRs") — the broadened view is
+      // still just My PRs (authored or reviewing), never literally every
+      // open PR in the repo, so the label shouldn't claim otherwise.
+      btn.textContent = active ? 'Exit Focus Mode' : 'Focus Mode';
+      // Tooltip explains what clicking Focus Mode WOULD show — irrelevant
+      // once already in that state, so it's removed (not just emptied;
+      // the CSS tooltip is driven by the [data-tooltip] attribute's mere
+      // presence) while active, and restored when toggled back off.
+      if (active) btn.removeAttribute('data-tooltip');
+      else btn.setAttribute('data-tooltip', FOCUS_MODE_TOOLTIP);
     });
   });
 
@@ -1408,8 +1601,8 @@ renderPage();
 // labels ("3 hours ago"/"Yesterday") are never stale from a previous
 // session — this is what a plain reload used to skip, only re-hydrating
 // the old cache. Skipped when no token is set yet: first-time setup still
-// requires the explicit "Refresh" click, since getting a token needs a
-// blocking window.prompt() that shouldn't ambush a fresh page load.
+// requires an explicit "Refresh" click, which opens the Settings modal —
+// a fresh page load shouldn't throw that modal up unprompted either.
 if (getGithubToken()) {
   handleGitLiveRefresh();
 }
