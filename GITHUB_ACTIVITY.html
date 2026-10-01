@@ -1,9 +1,76 @@
 <!--
   A Better Git Dashboard
-  Built by Dave Taylor.
-  Single standalone HTML file — no build step, no server, no dependencies
-  beyond a GitHub token you provide yourself. Free to use, copy, and
-  modify. See the version badge (top right) for a changelog.
+  Built by Dave Taylor. Free to use, copy, and modify.
+  See the version badge (top right, in-app) for a user-facing changelog.
+
+  ============================================================
+  FOR AI AGENTS & FUTURE DEVELOPERS — READ THIS FIRST
+  ============================================================
+
+  WHAT THIS IS
+  A single-file GitHub PR dashboard. Open it in a browser, enter a GitHub
+  token, point it at any repo via Settings. Shows your own open PRs (the
+  "My PRs" tab) plus a team-wide PR Distribution chart with 3 tabs: Open,
+  Closed, and Cycle Time.
+
+  HARD CONSTRAINTS — do not violate these without the user explicitly
+  asking to relax them:
+  - MUST stay ONE sendable HTML file. No build step, no bundler, no
+    package.json, no sidecar .js/.css files. Anyone should be able to
+    save this one file and open it in a browser.
+  - MUST NOT hardcode a GitHub username, token, or repo anywhere. `REPO`
+    defaults to RedHatInsights/uhc-portal but is fully user-editable via
+    the Settings modal (⚙ icon) and persisted in localStorage — every
+    repo-scoped query or URL must read the live `REPO` variable, never a
+    literal string.
+  - MUST NOT bump `APP_VERSION` unless the user explicitly says to in
+    those words. Default behavior for any change: edit/append to the
+    CURRENT version's `CHANGELOG` entry instead.
+  - The GitHub token lives in sessionStorage (cleared when the tab
+    closes), never localStorage, never written to disk, never logged.
+
+  ARCHITECTURE MAP (see the `// ==== SECTION ====` dividers below for
+  exact boundaries of each piece):
+  - State: `D` holds the current My-PRs dataset (`D.prs`, `D.pr_status`).
+    The Distribution modal has no separate persisted state — it fetches
+    its own point-in-time snapshot every time it's opened (see
+    `distributionCache`).
+  - GraphQL: every GitHub API call goes through one shared
+    `graphqlRequest()` helper (POST + 401/"bad credentials" normalization
+    into a thrown `{ authError: true }` so every caller's catch block
+    reacts identically). 3 independent fetch paths sit on top of it:
+    `fetchLiveGitData` (My PRs, scoped to @me), `fetchTeamDistribution`
+    (Open tab, repo-wide open PRs), `fetchClosedPRs` (Closed + Cycle Time
+    tabs, repo-wide closed PRs, paginated and capped at `CLOSED_PRS_MAX`).
+  - Two custom HTML/CSS modals — Settings (repo + token) and Distribution
+    (the 3-tab chart). Deliberately NOT native `prompt()`/`alert()`/
+    `confirm()` anywhere in this file: those have browser-controlled
+    chrome (title, an un-removable "don't show again" checkbox in some
+    browsers) that can't be styled or suppressed.
+  - Rendering is plain template-literal HTML strings assigned via
+    `innerHTML` — no framework, no virtual DOM. `initInteractions()`
+    re-binds event listeners after every re-render; elements that only
+    exist once (gear icon, version badge, modal buttons) guard against
+    double-binding via a `dataset.bound` flag.
+
+  STORAGE KEY INVENTORY:
+  - activity_monitor_gh_token   (sessionStorage) your GitHub token
+  - activity_monitor_repo       (localStorage)   "owner/name" being viewed
+  - activity_monitor_gh_login   (localStorage)   your GitHub login
+  - activity_monitor_gh_name    (localStorage)   your profile display name, if GitHub has one on file
+  - git_live_data_cache         (localStorage)   last My-PRs fetch (PRs + status), hydrates the page on reload
+  - pr_comments_seen            (localStorage)   per-PR "last seen" bookmark, drives the unread-comment badge
+
+  CONVENTIONS
+  - Every non-obvious decision gets an inline comment explaining WHY, not
+    just what. If you're about to delete or "simplify" a comment-heavy
+    block, read the comment first — it's very likely there because an
+    earlier, simpler version of that exact code was wrong in a way that
+    only became obvious once it broke against real GitHub data.
+  - Pure/testable logic (computeDistribution, computeClosedDistribution,
+    simplifyReviewers, formatRelativeAge, etc.) is kept free of DOM/fetch
+    calls specifically so it can be unit-tested via jsdom without a real
+    browser, network call, or build step.
 -->
 <!DOCTYPE html>
 <html lang="en">
@@ -149,6 +216,7 @@ table.focus-mode tr.pr-not-focus + tr.pr-comments { display: none; }
 #git-live-refresh-btn { font-size: 12px; padding: 4px 12px; }
 
 .unread-badge { background: #ef4444; color: #fff; font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 9px; margin-left: 6px; vertical-align: middle; letter-spacing: 0.2px; }
+.unread-total-badge { background: #ef4444; color: #fff; font-size: 11px; font-weight: 700; padding: 3px 10px; border-radius: 10px; margin-left: 8px; vertical-align: middle; letter-spacing: 0.2px; }
 
 /* Markdown rendered from comment bodies via marked.js — scoped to avoid
    inheriting the outer PR tables' sortable/resizable th/td styling. */
@@ -173,7 +241,13 @@ table.focus-mode tr.pr-not-focus + tr.pr-comments { display: none; }
 #distribution-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 1000; align-items: center; justify-content: center; }
 #distribution-overlay.open { display: flex; }
 #distribution-modal { background: #111; border: 1px solid #333; border-radius: 6px; padding: 20px; width: min(90vw, 900px); max-height: 85vh; overflow-y: auto; position: relative; }
-#distribution-modal h2 { font-size: 1.1em; color: #a5b4fc; margin-bottom: 12px; }
+#distribution-modal h2 { font-size: 1.1em; color: #a5b4fc; margin-bottom: 4px; }
+#distribution-subtitle { display: none; font-size: 12px; color: #6b7280; margin-bottom: 10px; line-height: 1.4; }
+#distribution-subtitle.visible { display: block; }
+#distribution-tabs { margin-bottom: 10px; }
+.distribution-tab { background: transparent; border: 1px solid rgba(165, 180, 252, 0.3); color: #9ca3af; font-size: 12px; padding: 5px 14px; border-radius: 14px; cursor: pointer; margin-right: 6px; }
+.distribution-tab:hover { background: rgba(165, 180, 252, 0.2); color: #d1d5db; }
+.distribution-tab.active { background: transparent; border: 2px solid #a5b4fc; color: #a5b4fc; font-weight: 700; }
 #distribution-close { position: absolute; top: 14px; right: 16px; background: none; border: none; color: #9ca3af; font-size: 20px; cursor: pointer; line-height: 1; }
 #distribution-close:hover { color: #e5e7eb; }
 #distribution-status { color: #6b7280; font-size: 13px; padding: 40px 0; text-align: center; }
@@ -272,18 +346,21 @@ if (typeof Chart !== 'undefined' && typeof ChartDataLabels !== 'undefined') {
   Chart.register(ChartDataLabels, valueUnderlinePlugin);
 }
 
+// ==== SECTION: CORE STATE & CONSTANTS ====
 const D = { prs: [], pr_status: {} };
 const JIRA = 'https://redhat.atlassian.net/browse/';
 // Bump this at significant milestones (new features, breaking layout/data
 // changes) — shown in the masthead so anyone using a sent-around copy of
 // this file can tell at a glance if they're on an old version.
-const APP_VERSION = '1.7';
+const APP_VERSION = '1.9';
 // Short (1-2 sentence) human-written summary of each version, shown in a
 // popover when the version badge is clicked. This can't be generated from
 // git at runtime — a standalone HTML file opened by a coworker has no repo
 // or git access at all — so it's manually curated here each time
 // APP_VERSION is bumped. Newest first.
 const CHANGELOG = {
+  '1.9': 'No behavior changes — added structured guidance for AI agents/future developers: hard constraints, an architecture map, a storage-key inventory, and section dividers throughout the code, so this file is easier to pick up cold.',
+  '1.8': 'Distribution chart now has 3 tabs: Open (unchanged), Closed (merged vs. abandoned PRs per author, last 6 months), and Cycle Time (average + median days-to-merge per month).',
   '1.7': 'UX styling changes, incl. showing your full name (when GitHub has one on file) in the header title and the Distribution chart.',
   '1.6': 'Replaced the token popup with a Settings modal (⚙ icon) that also lets you point this dashboard at any repo. Focus Mode now also shows PRs with unread comments.',
   '1.5': 'Pinned all 4 CDN scripts to exact versions with integrity hashes, so a compromised CDN can no longer silently run altered code in this page.',
@@ -308,13 +385,17 @@ function ghLink(n) { return `<a href="https://github.com/${REPO}/pull/${n}">#${n
 // counted from exactly one qualifier — see computeDistribution() and
 // DATASET_QUALIFIERS in openDistributionModal(). No more approximation:
 // every segment's count and its link now come from the same query.
-function githubPrSearchUrl(qualifier, login, isBot) {
+function githubPrSearchUrl(qualifier, login, isBot, baseQuery) {
   // GitHub Apps need an "app/" prefix in search qualifiers — their GraphQL
   // login (e.g. "red-hat-konflux") doesn't match by itself. Confirmed live
-  // across all 3 qualifiers we use (author:, reviewed-by:, review-
+  // across all qualifiers we use (author:, reviewed-by:, review-
   // requested:) — regular users never use this prefix.
   const target = isBot ? `app/${login}` : login;
-  return `https://github.com/${REPO}/pulls?q=${encodeURIComponent(`is:pr is:open ${qualifier}:${target}`)}`;
+  // baseQuery defaults to the Open-tab's query; Closed/Cycle-Time pass
+  // their own (is:merged / is:closed is:unmerged, with a closed:>= date
+  // bound) rather than this function hardcoding is:open.
+  const base = baseQuery || 'is:pr is:open';
+  return `https://github.com/${REPO}/pulls?q=${encodeURIComponent(`${base} ${qualifier}:${target}`)}`;
 }
 function esc(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
@@ -327,6 +408,7 @@ const MY_NAME_COLOR = '#c084fc';
 // Shared between the Focus Mode button's initial render and its toggle
 // handler (see initInteractions) so the two can never drift out of sync.
 const FOCUS_MODE_TOOLTIP = 'Shows only PRs you authored, are waiting for your review, or have unread comments';
+// ==== SECTION: FORMATTING HELPERS ====
 function highlightIfMe(name, myUser) {
   return name === myUser ? `<span style="color:${MY_NAME_COLOR};">${esc(name)}</span>` : esc(name);
 }
@@ -416,6 +498,35 @@ function markCommentsSeen(prNumber, upToWhen) {
   localStorage.setItem(COMMENTS_SEEN_KEY, JSON.stringify(map));
 }
 
+// ==== SECTION: MY PRs — TABLE RENDERING ====
+
+// Pure (no DOM), same testability goal as the compute* functions in the
+// Distribution section — total unread comment count across a list of
+// PRs, reusing the exact same "newer than last seen" rule as the per-row
+// unread badge (see getCommentSeenUpTo). Used for the header-level
+// "Unread comments (n)" summary badge.
+function countUnreadComments(prs) {
+  return (prs || []).reduce((total, pr) => {
+    const seenUpTo = getCommentSeenUpTo(pr.number);
+    const unread = (pr.comments || []).filter(c => (c.when || '') > seenUpTo).length;
+    return total + unread;
+  }, 0);
+}
+
+// Recomputes and updates the header's "Unread comments (n)" badge in
+// place — called after any comment-thread expansion marks comments as
+// seen, since that only removes that one row's own badge (see
+// initInteractions' toggle handler) without re-rendering the whole page.
+// Without this, the header total would go stale the moment any PR's
+// comments were read.
+function refreshUnreadTotalBadge() {
+  const total = countUnreadComments(D.prs);
+  const badge = document.getElementById('unread-total-badge');
+  if (!badge) return; // nothing to update if it was never rendered (started at 0)
+  if (total > 0) badge.textContent = `Unread comments (${total})`;
+  else badge.remove();
+}
+
 function renderPRs() {
   const myUser = getMyGithubLogin();
   const byPrNumberAsc = (a, b) => a.number - b.number;
@@ -436,8 +547,12 @@ function renderPRs() {
     const st = D.pr_status && D.pr_status[pr.number];
     return n + (st && st.draft ? 1 : 0);
   }, 0);
+  const totalUnread = countUnreadComments(allPRs);
 
   let html = `<h3 style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;"><span>My PRs`;
+  if (totalUnread > 0) {
+    html += ` <span id="unread-total-badge" class="unread-total-badge">Unread comments (${totalUnread})</span>`;
+  }
   if (draftCount) {
     html += ` <button class="draft-toggle" data-draft-table="prs-table">Show Draft PRs (${draftCount})</button>`;
   }
@@ -578,6 +693,7 @@ function renderMergeStatus(state) {
 // portion.
 // ============================================================
 
+// ==== SECTION: STORAGE KEYS, REPO CONFIG & SETTINGS MODAL ====
 const GH_TOKEN_KEY = 'activity_monitor_gh_token';
 const GIT_LIVE_CACHE_KEY = 'git_live_data_cache';
 // REPO is deliberately `let`, not `const` — it's user-editable via the
@@ -712,6 +828,9 @@ function saveSettings() {
 // Reviewer state is the raw GitHub API value — each reviewer's latest
 // PullRequestReview.state, plus "pending" for anyone requested who hasn't
 // reviewed yet. No custom overrides, no derived "ball in your court" logic.
+// ==== SECTION: GRAPHQL — MY PRs (LIVE FETCH) ====
+// Also defines the shared graphqlRequest() helper (below), used by every
+// GraphQL fetch path in this file, not just this one.
 function simplifyReviewers(reviews, prAuthor, requestedLogins) {
   const latestByUser = {};
   for (const rev of reviews) {
@@ -882,8 +1001,14 @@ function buildLivePrData(data, githubUser) {
   return { prsList, prStatus };
 }
 
-async function fetchLiveGitData(token) {
-  const query = buildLiveQuery();
+// Single shared GraphQL POST + auth-error normalization — every GraphQL
+// call in this file goes through this one function, so a 401 or a "bad
+// credentials" error message always throws the same { authError: true }
+// shape no matter which query triggered it, letting every catch block
+// react identically (clear the token, prompt Settings). Previously
+// duplicated verbatim in 2 places; a 3rd/4th caller (Closed PRs, Cycle
+// Time) is exactly the kind of copy that was worth collapsing first.
+async function graphqlRequest(token, query) {
   const resp = await fetch('https://api.github.com/graphql', {
     method: 'POST',
     headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
@@ -896,10 +1021,15 @@ async function fetchLiveGitData(token) {
     if (/bad credentials|unauthorized/i.test(msg)) { const e = new Error(msg); e.authError = true; throw e; }
     throw new Error(msg);
   }
-  const githubUser = json.data.viewer.login;
+  return json.data;
+}
+
+async function fetchLiveGitData(token) {
+  const data = await graphqlRequest(token, buildLiveQuery());
+  const githubUser = data.viewer.login;
   setMyGithubLogin(githubUser);
-  setMyGithubName(json.data.viewer.name || '');
-  return buildLivePrData(json.data, githubUser);
+  setMyGithubName(data.viewer.name || '');
+  return buildLivePrData(data, githubUser);
 }
 
 // Lightweight fragment for the Distribution chart — deliberately excludes
@@ -913,6 +1043,7 @@ async function fetchLiveGitData(token) {
 // both __typename:"Bot" even though their logins don't look alike and
 // neither has a "[bot]" suffix, which is exactly the kind of case a
 // manually-maintained string list keeps missing.
+// ==== SECTION: GRAPHQL — OPEN PR DISTRIBUTION (Distribution modal, Open tab) ====
 const TEAM_PR_FRAGMENT = `
   number
   author { __typename login ... on User { name } }
@@ -1031,22 +1162,171 @@ function computeDistribution(prNodes) {
 // PRs, not just @me), so it's kept fully separate from the main live-fetch
 // path and its cache.
 async function fetchTeamDistribution(token) {
-  const query = buildTeamDistributionQuery();
-  const resp = await fetch('https://api.github.com/graphql', {
-    method: 'POST',
-    headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query })
-  });
-  if (resp.status === 401) { const e = new Error('Unauthorized'); e.authError = true; throw e; }
-  const json = await resp.json();
-  if (json.errors && json.errors.length) {
-    const msg = json.errors.map(e => e.message).join('; ');
-    if (/bad credentials|unauthorized/i.test(msg)) { const e = new Error(msg); e.authError = true; throw e; }
-    throw new Error(msg);
-  }
-  return computeDistribution((json.data.search && json.data.search.nodes) || []);
+  const data = await graphqlRequest(token, buildTeamDistributionQuery());
+  return computeDistribution((data.search && data.search.nodes) || []);
 }
 
+// ---- Closed PRs (last 3 months) — backs both the "Closed" and "Cycle
+// Time" tabs off one shared fetch, since both just need mergedAt/closedAt
+// per PR and there's no reason to hit GraphQL twice for the same window.
+// ==== SECTION: GRAPHQL — CLOSED PRs & CYCLE TIME (Distribution modal, Closed/Cycle Time tabs) ====
+const CLOSED_PRS_MONTHS = 6;
+// Capped rather than fully paginated — a 6-month window on an active repo
+// can run into the hundreds/thousands of closed PRs, and every extra page
+// is a sequential network round-trip (GraphQL rate-limit cost itself is
+// negligible — this fragment has no nested connections, ~1 point/page
+// against a 5,000/hour budget; the real cost is wall-clock latency, not
+// API quota). 600 (6 pages of 100) keeps pace with CLOSED_PRS_MONTHS so
+// raising one without the other doesn't silently truncate the window.
+const CLOSED_PRS_MAX = 600;
+
+function threeMonthsAgoISODate() {
+  const d = new Date();
+  d.setMonth(d.getMonth() - CLOSED_PRS_MONTHS);
+  return d.toISOString().slice(0, 10);
+}
+
+// Deliberately lighter than TEAM_PR_FRAGMENT — no reviews/reviewRequests,
+// since Closed/Cycle-Time only need who authored each PR and when it was
+// created vs. merged/closed.
+const CLOSED_PR_FRAGMENT = `
+  number
+  author { __typename login ... on User { name } }
+  createdAt
+  mergedAt
+  closedAt
+`;
+
+function buildClosedPRsQuery(sinceDate, afterCursor) {
+  const after = afterCursor ? `, after: ${JSON.stringify(afterCursor)}` : '';
+  const q = `repo:${REPO} is:pr is:closed closed:>=${sinceDate}`;
+  return `query {
+    search(query: ${JSON.stringify(q)}, type: ISSUE, first: 100${after}) {
+      pageInfo { hasNextPage endCursor }
+      nodes { ... on PullRequest { ${CLOSED_PR_FRAGMENT} } }
+    }
+  }`;
+}
+
+// onPageFetched(pageNum) is optional progress feedback — with
+// CLOSED_PRS_MONTHS/MAX now covering up to 6 pages' worth of sequential
+// round-trips, a static "Fetching…" spinner can sit still long enough to
+// look stuck. Purely a UI nicety; omit it and this still works headless.
+async function fetchClosedPRs(token, onPageFetched) {
+  const sinceDate = threeMonthsAgoISODate();
+  const nodes = [];
+  let cursor = null;
+  let page = 0;
+  do {
+    page++;
+    const data = await graphqlRequest(token, buildClosedPRsQuery(sinceDate, cursor));
+    const search = data.search || {};
+    nodes.push(...(search.nodes || []));
+    cursor = (search.pageInfo && search.pageInfo.hasNextPage) ? search.pageInfo.endCursor : null;
+    if (onPageFetched) onPageFetched(page);
+  } while (cursor && nodes.length < CLOSED_PRS_MAX);
+  return { nodes: nodes.slice(0, CLOSED_PRS_MAX), sinceDate };
+}
+
+// Pure function (no DOM/fetch), same testability goal as computeDistribution.
+// Splits each author's closed PRs into Merged vs. Closed-without-merging
+// (abandoned/rejected) rather than a single "closed" count — a flat count
+// can't distinguish "shipped a lot of work" from "a lot of PRs got
+// abandoned," which is the more useful signal here.
+//
+// Also buckets every merged PR's days-to-merge (createdAt -> mergedAt) by
+// the calendar month it was merged in, for the Cycle Time tab — a trend
+// line (is the team's merge cadence speeding up or slowing down?) rather
+// than a per-author bar, which told you who's slow but nothing about
+// direction over time. Bucketed by merge month, not creation month,
+// since a PR's duration data point only "completes" once it merges.
+function computeClosedDistribution(prNodes) {
+  const mergedCount = {};
+  const abandonedCount = {};
+  const monthlyDurations = {}; // "YYYY-MM" -> [daysToMerge, ...]
+  const botLogins = new Set();
+  const displayNames = {};
+  const noteDisplayName = actor => {
+    if (actor && actor.login && actor.name) displayNames[actor.login] = actor.name;
+  };
+  for (const node of prNodes) {
+    const login = node.author ? node.author.login : '';
+    if (!login) continue;
+    if (node.author && node.author.__typename === 'Bot') botLogins.add(login);
+    noteDisplayName(node.author);
+    if (node.mergedAt) {
+      mergedCount[login] = (mergedCount[login] || 0) + 1;
+      const days = (new Date(node.mergedAt) - new Date(node.createdAt)) / 86400000;
+      const monthKey = node.mergedAt.slice(0, 7); // "YYYY-MM"
+      (monthlyDurations[monthKey] = monthlyDurations[monthKey] || []).push(days);
+    } else {
+      abandonedCount[login] = (abandonedCount[login] || 0) + 1;
+    }
+  }
+  const roster = Array.from(new Set([...Object.keys(mergedCount), ...Object.keys(abandonedCount)]));
+  const totalFor = u => (mergedCount[u] || 0) + (abandonedCount[u] || 0);
+  roster.sort((a, b) => totalFor(b) - totalFor(a) || a.localeCompare(b));
+
+  // Exclude the current (still in-progress) calendar month from the
+  // Cycle Time trend — this does NOT affect the Closed tab's merged/
+  // abandoned counts above, only the monthly-average line below. A
+  // partial month's average reflects only however many PRs happened to
+  // merge in the first few days of it, which is a small, still-shifting
+  // sample that would otherwise misleadingly read as "this month's
+  // cadence" and keep changing every time the chart is reopened.
+  const currentMonthKey = new Date().toISOString().slice(0, 7);
+  // Chronological "YYYY-MM" keys sort correctly as plain strings — no
+  // Date parsing needed to order them.
+  const cycleTimeMonths = Object.keys(monthlyDurations).filter(m => m !== currentMonthKey).sort();
+  const cycleTimeMonthLabels = cycleTimeMonths.map(m => {
+    const [y, mo] = m.split('-').map(Number);
+    return new Date(y, mo - 1, 1).toLocaleDateString('en-US', { year: 'numeric', month: 'short' });
+  });
+  const cycleTimeMonthlyAvgDays = cycleTimeMonths.map(m => {
+    const arr = monthlyDurations[m];
+    return Math.round((arr.reduce((sum, d) => sum + d, 0) / arr.length) * 10) / 10;
+  });
+  // Median alongside the mean — a straight arithmetic mean is dragged
+  // hard by just a couple of PRs that sat open for weeks before finally
+  // merging in a given month, even if most PRs that month were fast.
+  // Median is outlier-resistant: if it stays flat while the mean swings,
+  // that confirms the swing is a few stragglers, not an actual cadence
+  // change. Plotted as a 2nd line precisely so the two shapes can be
+  // compared at a glance.
+  const median = arr => {
+    const sorted = [...arr].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+  };
+  const cycleTimeMonthlyMedianDays = cycleTimeMonths.map(m => Math.round(median(monthlyDurations[m]) * 10) / 10);
+  // PR volume per month — not plotted, but exposed so the UI can flag
+  // low-volume months where an average is more noise than signal.
+  const cycleTimeMonthlyCounts = cycleTimeMonths.map(m => monthlyDurations[m].length);
+  // True overall average across every individual PR's duration in the
+  // completed months above (weighted by actual PR count per month, not
+  // an average-of-the-monthly-averages, which would under-weight busy
+  // months and over-weight quiet ones) — drawn as a flat reference line.
+  const allCompletedDurations = cycleTimeMonths.flatMap(m => monthlyDurations[m]);
+  const cycleTimeOverallAvgDays = allCompletedDurations.length
+    ? Math.round((allCompletedDurations.reduce((sum, d) => sum + d, 0) / allCompletedDurations.length) * 10) / 10
+    : 0;
+
+  return {
+    users: roster,
+    isBot: roster.map(u => botLogins.has(u)),
+    displayNames: roster.map(u => displayNames[u] || u),
+    mergedCounts: roster.map(u => mergedCount[u] || 0),
+    abandonedCounts: roster.map(u => abandonedCount[u] || 0),
+    cycleTimeMonths,
+    cycleTimeMonthLabels,
+    cycleTimeMonthlyAvgDays,
+    cycleTimeMonthlyMedianDays,
+    cycleTimeMonthlyCounts,
+    cycleTimeOverallAvgDays
+  };
+}
+
+// ==== SECTION: MY PRs TAB — UI SHELL (Refresh button, empty state, tab content) ====
 function renderGitLiveControls() {
   const cached = getGitLiveCache();
   const initialStatus = cached && cached.fetchedAt
@@ -1107,7 +1387,34 @@ async function handleGitLiveRefresh() {
   }
 }
 
+// ==== SECTION: DISTRIBUTION MODAL (Open / Closed / Cycle Time tabs) ====
 let distributionChartInstance = null;
+// Which tab is currently showing — drives nothing on its own, just read
+// by click handlers that need to know the active chart's context.
+let distributionActiveTab = 'open';
+// Per-modal-open-session cache. "closed" backs BOTH the Closed and Cycle
+// Time tabs (same underlying GraphQL fetch, two different views of it),
+// so switching between those two tabs never re-fetches. Reset to null on
+// every fresh openDistributionModal() call — same "fresh snapshot on
+// every open" behavior this modal had before tabs existed, just now
+// covering both cache slots.
+let distributionCache = { open: null, closed: null };
+
+const DISTRIBUTION_FOOTNOTES = {
+  open: '* "# Reviewed" = your latest formal review per PR (Approved, Changes Requested, or Commented-via-review) — plain PR comments outside a review don\'t count.',
+  closed: '* "Closed without merging" = the PR was closed/abandoned rather than merged into the codebase.',
+  cycletime: 'Median — half that month\'s PRs merged faster than this, half slower. A big gap between avg and median means a persistent long tail of slow PRs is dragging the Average up every month, not a one-off — the gap size roughly shows how bad that month\'s stragglers were.'
+};
+
+// Only Cycle Time uses this (Open/Closed clear it to empty) — the
+// click-to-open-GitHub behavior isn't otherwise discoverable, so it gets
+// its own line directly under the title instead of being buried in the
+// footnote below the chart.
+const DISTRIBUTION_SUBTITLES = {
+  open: '',
+  closed: '',
+  cycletime: 'Click any point to open that month\'s merged PRs on GitHub, sorted oldest-created first — the fastest way to find that month\'s long-tail stragglers.'
+};
 
 function ensureDistributionModal() {
   if (document.getElementById('distribution-overlay')) return;
@@ -1115,14 +1422,28 @@ function ensureDistributionModal() {
   overlay.id = 'distribution-overlay';
   overlay.innerHTML = `<div id="distribution-modal">
     <button id="distribution-close" title="Close">✕</button>
+    <div id="distribution-tabs">
+      <button class="distribution-tab active" data-tab="open">Open</button>
+      <button class="distribution-tab" data-tab="closed">Closed</button>
+      <button class="distribution-tab" data-tab="cycletime">Cycle Time</button>
+    </div>
     <h2 id="distribution-title">PR Distribution by Contributors</h2>
+    <div id="distribution-subtitle"></div>
     <div id="distribution-status"><div id="distribution-spinner"></div>Loading…</div>
     <div id="distribution-chart-wrap"><canvas id="distribution-canvas" height="90"></canvas></div>
-    <div id="distribution-footnote">* "# Reviewed" = your latest formal review per PR (Approved, Changes Requested, or Commented-via-review) — plain PR comments outside a review don't count.</div>
+    <div id="distribution-footnote"></div>
   </div>`;
   document.body.appendChild(overlay);
   overlay.addEventListener('click', e => { if (e.target === overlay) closeDistributionModal(); });
   document.getElementById('distribution-close').addEventListener('click', closeDistributionModal);
+  overlay.querySelectorAll('.distribution-tab').forEach(btn => {
+    btn.addEventListener('click', () => {
+      if (btn.classList.contains('active')) return;
+      overlay.querySelectorAll('.distribution-tab').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      loadDistributionTab(btn.getAttribute('data-tab'));
+    });
+  });
   document.addEventListener('keydown', e => {
     if (e.key === 'Escape' && overlay.classList.contains('open')) closeDistributionModal();
   });
@@ -1133,30 +1454,313 @@ function closeDistributionModal() {
   if (overlay) overlay.classList.remove('open');
 }
 
-// Fetches team-wide PR data fresh on every click — an on-demand,
-// point-in-time snapshot for the modal only. Deliberately not persisted
-// to the main live-fetch cache (which stays scoped to @me) and never
-// triggered by page load or auto-refresh — only this click handler calls
-// fetchTeamDistribution().
-async function openDistributionModal() {
-  ensureDistributionModal();
-  const overlay = document.getElementById('distribution-overlay');
-  const statusEl = document.getElementById('distribution-status');
-  const chartWrap = document.getElementById('distribution-chart-wrap');
-  overlay.classList.add('open');
-  // Set on every open (not baked into the one-time ensureDistributionModal
-  // markup above) since REPO can change via Settings after this modal's
-  // DOM already exists.
-  document.getElementById('distribution-title').textContent = `PR Distribution by ${REPO} Contributors`;
-  chartWrap.style.display = 'none';
+// ---- Shared status/chart plumbing used by all 3 tabs ----
+
+function distributionShowStatus(message, color) {
+  document.getElementById('distribution-chart-wrap').style.display = 'none';
   document.getElementById('distribution-footnote').style.display = 'none';
+  const statusEl = document.getElementById('distribution-status');
+  statusEl.style.display = 'block';
+  statusEl.style.color = color || '#6b7280';
+  statusEl.textContent = message;
+}
+
+function distributionShowSpinner(message) {
+  document.getElementById('distribution-chart-wrap').style.display = 'none';
+  document.getElementById('distribution-footnote').style.display = 'none';
+  const statusEl = document.getElementById('distribution-status');
   statusEl.style.display = 'block';
   statusEl.style.color = '#6b7280';
   // innerHTML (not textContent) here since the spinner div needs to
-  // survive — every other status update below (empty/error) uses plain
-  // textContent, which is fine since those are terminal states with no
-  // spinner.
-  statusEl.innerHTML = '<div id="distribution-spinner"></div>Fetching team PR data…';
+  // survive — status/empty/error states above and below all use plain
+  // textContent since those are terminal states with no spinner.
+  statusEl.innerHTML = `<div id="distribution-spinner"></div>${esc(message)}`;
+}
+
+function distributionShowError(err) {
+  if (err && err.authError) {
+    clearGithubToken();
+    distributionShowStatus('Token invalid/expired — close this and click the ⚙ Settings icon to re-enter it.', '#ef4444');
+  } else {
+    distributionShowStatus('Error: ' + (err && err.message ? err.message : 'fetch failed'), '#ef4444');
+  }
+  console.error('[distribution] fetch failed', err);
+}
+
+// Destroys the previous Chart.js instance and draws a fresh one from the
+// given config, then reveals the chart + footnote (hiding the status
+// text/spinner). Shared by all 3 tabs so a tab switch can never leave a
+// stale canvas drawn underneath the new one.
+function distributionRenderChart(config) {
+  document.getElementById('distribution-status').style.display = 'none';
+  document.getElementById('distribution-chart-wrap').style.display = 'block';
+  document.getElementById('distribution-footnote').style.display = 'block';
+  const canvas = document.getElementById('distribution-canvas');
+  if (distributionChartInstance) distributionChartInstance.destroy();
+  distributionChartInstance = new Chart(canvas.getContext('2d'), config);
+}
+
+// Axis/legend/grid/datalabel styling shared across all 3 tabs — only the
+// datasets, title, and click-qualifier logic differ per tab.
+function distributionBaseChartOptions(yAxisTitle, onBarClick) {
+  return {
+    responsive: true,
+    // Fixed pixel height (via the wrapper's CSS height, not an aspect
+    // ratio) so small-count segments get enough real room for their
+    // number + underline — see #distribution-chart-wrap in <style>.
+    maintainAspectRatio: false,
+    onClick: (evt, elements) => { if (elements.length) onBarClick(elements[0]); },
+    onHover: (evt, elements) => {
+      evt.native.target.style.cursor = elements.length ? 'pointer' : 'default';
+    },
+    scales: {
+      x: { stacked: true, ticks: { color: '#d1d5db' }, grid: { color: '#262b36' } },
+      y: { stacked: true, beginAtZero: true, ticks: { color: '#d1d5db', precision: 0 }, grid: { color: '#262b36' }, title: { display: true, text: yAxisTitle, color: '#9ca3af' } }
+    },
+    plugins: {
+      legend: { labels: { color: '#d1d5db' } },
+      tooltip: { enabled: false },
+      // chartjs-plugin-datalabels (loaded in <head>) — show each segment's
+      // raw count/value, hide the label on empty/zero segments since a
+      // zero-height segment has no room to render text anyway.
+      datalabels: { color: '#0a0a0a', font: { weight: 'bold' }, formatter: v => (v > 0 ? v : '') }
+    }
+  };
+}
+
+// ---- Open tab ----
+
+function renderOpenDistributionChart(data) {
+  const { users, isBot, displayNames, reviewedCounts, pendingCounts, createdCounts } = data;
+  if (!users.length) {
+    distributionShowStatus('No open PRs found in ' + REPO + '.');
+    return;
+  }
+  // Index-aligned with the datasets array below — one source of truth
+  // for "which segment maps to which GitHub search qualifier" so the
+  // click handler can never drift out of sync with the dataset order.
+  const DATASET_QUALIFIERS = ['reviewed-by', 'review-requested', 'author'];
+  // x-axis text only — marks bots (e.g. "red-hat-konflux 🤖") so their
+  // automated PR volume reads distinctly from human team members. `users`
+  // itself (used for URL-building) stays as the plain login throughout.
+  const displayLabels = users.map((u, i) => isBot[i] ? `${displayNames[i]} 🤖` : displayNames[i]);
+  distributionRenderChart({
+    type: 'bar',
+    data: {
+      labels: displayLabels,
+      datasets: [
+        { label: '# Reviewed', data: reviewedCounts, backgroundColor: '#60a5fa', categoryPercentage: 0.9, barPercentage: 0.95 },
+        { label: '# Pending Review', data: pendingCounts, backgroundColor: '#f59e0b', categoryPercentage: 0.9, barPercentage: 0.95 },
+        { label: '# Created', data: createdCounts, backgroundColor: '#2dd4bf', categoryPercentage: 0.9, barPercentage: 0.95 }
+      ]
+    },
+    // Clicking a segment opens that person's matching GitHub PR search in
+    // a new tab — an EXACT match, not an approximation, since each
+    // segment's count was computed from exactly one qualifier.
+    options: distributionBaseChartOptions('# PRs', el => {
+      const { datasetIndex, index } = el;
+      window.open(githubPrSearchUrl(DATASET_QUALIFIERS[datasetIndex], users[index], isBot[index]), '_blank');
+    })
+  });
+}
+
+// ---- Closed tab ----
+
+function renderClosedDistributionChart(data) {
+  const { users, isBot, displayNames, mergedCounts, abandonedCounts, sinceDate } = data;
+  if (!users.length) {
+    distributionShowStatus(`No closed PRs found in ${REPO} in the last ${CLOSED_PRS_MONTHS} months.`);
+    return;
+  }
+  const displayLabels = users.map((u, i) => isBot[i] ? `${displayNames[i]} 🤖` : displayNames[i]);
+  distributionRenderChart({
+    type: 'bar',
+    data: {
+      labels: displayLabels,
+      datasets: [
+        { label: 'Merged', data: mergedCounts, backgroundColor: '#4ade80', categoryPercentage: 0.9, barPercentage: 0.95 },
+        { label: 'Closed without merging', data: abandonedCounts, backgroundColor: '#f87171', categoryPercentage: 0.9, barPercentage: 0.95 }
+      ]
+    },
+    options: distributionBaseChartOptions('# PRs', el => {
+      const { datasetIndex, index } = el;
+      const base = datasetIndex === 0
+        ? `is:pr is:merged closed:>=${sinceDate}`
+        : `is:pr is:closed is:unmerged closed:>=${sinceDate}`;
+      window.open(githubPrSearchUrl('author', users[index], isBot[index], base), '_blank');
+    })
+  });
+}
+
+// ---- Cycle Time tab ----
+// A line chart, not a per-author bar — the useful question here is "is
+// the team's merge cadence getting faster or slower over time," which a
+// per-person bar can't show at all (it ranks people, not trend direction).
+
+function renderCycleTimeChart(data) {
+  const { cycleTimeMonths, cycleTimeMonthLabels, cycleTimeMonthlyAvgDays, cycleTimeMonthlyMedianDays, cycleTimeMonthlyCounts, cycleTimeOverallAvgDays } = data;
+  if (!cycleTimeMonths.length) {
+    distributionShowStatus(`No merged PRs found in ${REPO} in the last ${CLOSED_PRS_MONTHS} months (excluding the current, still in-progress month).`);
+    return;
+  }
+  // Dynamic y-axis floor, not a hardcoded one — median can legitimately
+  // sit well below the mean (a right-skewed "mostly fast, a few very
+  // slow" distribution), so a fixed floor picked to suit the mean alone
+  // would silently clip the median line off the bottom of the chart.
+  const yMin = Math.max(0, Math.floor(Math.min(...cycleTimeMonthlyAvgDays, ...cycleTimeMonthlyMedianDays)) - 1);
+  distributionRenderChart({
+    type: 'line',
+    data: {
+      labels: cycleTimeMonthLabels,
+      datasets: [
+        {
+          label: 'Avg days to merge',
+          data: cycleTimeMonthlyAvgDays,
+          borderColor: '#a5b4fc',
+          // Explicit (not relying on Chart.js's global line-element
+          // default) so the legend override below can mirror this exact
+          // value — see generateLabels in plugins.legend.
+          borderWidth: 3,
+          backgroundColor: 'rgba(165, 180, 252, 0.15)',
+          pointBackgroundColor: '#a5b4fc',
+          pointRadius: 5,
+          pointHoverRadius: 7,
+          tension: 0.25,
+          fill: true
+        },
+        // Median per month — no per-point labels (would collide with the
+        // mean line's labels above); the point is to compare this line's
+        // SHAPE against the mean line's, not read exact values off it.
+        {
+          label: 'Median days to merge',
+          data: cycleTimeMonthlyMedianDays,
+          borderColor: '#34d399',
+          borderWidth: 3,
+          backgroundColor: 'transparent',
+          pointBackgroundColor: '#34d399',
+          pointRadius: 4,
+          pointHoverRadius: 6,
+          tension: 0.25,
+          fill: false,
+          datalabels: { display: false }
+        },
+        // Flat reference line at the overall average — a 2nd dataset with
+        // the same value repeated across every x-point, styled dashed
+        // with no markers, rather than pulling in a 5th CDN dependency
+        // (chartjs-plugin-annotation) just to draw one line.
+        {
+          label: `${cycleTimeMonths.length}-month avg (${cycleTimeOverallAvgDays}d)`,
+          data: cycleTimeMonthLabels.map(() => cycleTimeOverallAvgDays),
+          borderColor: '#6b7280',
+          borderDash: [6, 6],
+          borderWidth: 1.5,
+          pointRadius: 0,
+          pointHoverRadius: 0,
+          tension: 0,
+          fill: false,
+          // Per-dataset override (chartjs-plugin-datalabels respects
+          // this) — the per-point "Nd (n=X)" labels below only make
+          // sense on the real monthly-average line, not this flat one.
+          datalabels: { display: false }
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      // Extra right padding so the last month's datalabel (often the
+      // widest text in the chart) has room to render without being cut
+      // off at the canvas edge — paired with the per-point align
+      // override below, which also shifts that specific label leftward
+      // off its point instead of centering it.
+      layout: { padding: { top: 20, right: 50 } },
+      // Clicking a month point opens that month's merged PRs on GitHub —
+      // no author qualifier here (this chart isn't per-person), just a
+      // merged:<month-start>..<month-end> date-range search.
+      onClick: (evt, elements) => {
+        if (!elements.length) return;
+        const { index } = elements[0];
+        const [y, mo] = cycleTimeMonths[index].split('-').map(Number);
+        const monthStart = new Date(y, mo - 1, 1).toISOString().slice(0, 10);
+        const monthEnd = new Date(y, mo, 0).toISOString().slice(0, 10);
+        // sort:created-asc — within a merged-this-month result set, the
+        // oldest-created PRs are exactly the long-tail stragglers that
+        // skew the mean (they sat open the longest before finally
+        // landing). Oldest-first means the useful ones are at the top of
+        // the results instead of buried behind a page of fast merges.
+        const url = `https://github.com/${REPO}/pulls?q=${encodeURIComponent(`is:pr is:merged merged:${monthStart}..${monthEnd} sort:created-asc`)}`;
+        window.open(url, '_blank');
+      },
+      onHover: (evt, elements) => {
+        evt.native.target.style.cursor = elements.length ? 'pointer' : 'default';
+      },
+      scales: {
+        x: { ticks: { color: '#d1d5db' }, grid: { color: '#262b36' } },
+        // Dynamic floor (not beginAtZero) — days-to-merge realistically
+        // never approaches 0 for this team, so a 0-floor wastes vertical
+        // space. yMin is computed from the actual mean+median data above
+        // specifically so it never clips either line.
+        y: { min: yMin, ticks: { color: '#d1d5db' }, grid: { color: '#262b36' }, title: { display: true, text: 'Avg days open → merged', color: '#9ca3af' } }
+      },
+      plugins: {
+        legend: {
+          labels: {
+            color: '#d1d5db',
+            usePointStyle: true,
+            // Both datasets here are lines, not filled boxes — the
+            // default legend swatch is a rectangle, which read as "where's
+            // the box in the chart?" since this chart has no bars. Custom
+            // generateLabels wraps Chart.js's own default (so text/color/
+            // etc. all still come from the dataset as normal) and only
+            // overrides pointStyle to a line/dash glyph matching each
+            // dataset's actual line style. Deliberately NOT setting
+            // pointStyle on the datasets themselves — that would also
+            // change the real circular markers drawn on the chart.
+            generateLabels: chart => {
+              const items = Chart.defaults.plugins.legend.labels.generateLabels(chart);
+              items.forEach(item => {
+                const ds = chart.data.datasets[item.datasetIndex];
+                item.pointStyle = (ds.borderDash && ds.borderDash.length) ? 'dash' : 'line';
+                // Mirror each dataset's own borderWidth into the legend
+                // glyph explicitly — Chart.js's point-style legend icons
+                // don't reliably come out visually matching the actual
+                // plotted line's thickness otherwise.
+                item.lineWidth = ds.borderWidth;
+              });
+              return items;
+            }
+          }
+        },
+        tooltip: { enabled: false },
+        // Shows "<avg>d" above each point plus the underlying PR count
+        // for that month (small-sample months read very differently than
+        // a 20-PR month averaging the same number of days).
+        datalabels: {
+          // The last point's label is the one most likely to overflow
+          // the canvas's right edge (nothing to its right to balance a
+          // centered label against) — shift it to sit left of its point
+          // instead of centered above it. Every other point keeps the
+          // normal centered-above placement.
+          align: ctx => ctx.dataIndex === cycleTimeMonthLabels.length - 1 ? 'left' : 'top',
+          offset: ctx => ctx.dataIndex === cycleTimeMonthLabels.length - 1 ? 12 : 8,
+          color: '#d1d5db',
+          font: { weight: 'bold', size: 11 },
+          formatter: (v, ctx) => `${v}d (# PRs merged: ${cycleTimeMonthlyCounts[ctx.dataIndex]})`
+        }
+      }
+    }
+  });
+}
+
+// ---- Tab orchestration ----
+
+async function loadDistributionTab(tab) {
+  distributionActiveTab = tab;
+  document.getElementById('distribution-footnote').textContent = DISTRIBUTION_FOOTNOTES[tab];
+  const subtitleEl = document.getElementById('distribution-subtitle');
+  const subtitleText = DISTRIBUTION_SUBTITLES[tab] || '';
+  subtitleEl.textContent = subtitleText;
+  subtitleEl.classList.toggle('visible', !!subtitleText);
 
   const token = getGithubToken();
   if (!token) {
@@ -1165,93 +1769,54 @@ async function openDistributionModal() {
     return;
   }
 
+  if (tab === 'open') {
+    document.getElementById('distribution-title').textContent = `Open PR Distribution by ${REPO} Contributors`;
+    distributionShowSpinner('Fetching team PR data…');
+    try {
+      if (!distributionCache.open) distributionCache.open = await fetchTeamDistribution(token);
+      renderOpenDistributionChart(distributionCache.open);
+    } catch (err) {
+      distributionShowError(err);
+    }
+    return;
+  }
+
+  // "closed" and "cycletime" share one fetch — both just need each closed
+  // PR's author + createdAt/mergedAt, so there's no reason to hit GraphQL
+  // twice for the same 3-month window.
+  document.getElementById('distribution-title').textContent = tab === 'closed'
+    ? `Closed PR Distribution by ${REPO} Contributors (last ${CLOSED_PRS_MONTHS} months)`
+    : `PR Cycle Time for ${REPO} by Month (last ${CLOSED_PRS_MONTHS} months)`;
+  distributionShowSpinner('Fetching closed PR data…');
   try {
-    const { users, isBot, displayNames, reviewedCounts, pendingCounts, createdCounts } = await fetchTeamDistribution(token);
-    if (!users.length) {
-      statusEl.textContent = 'No open PRs found in ' + REPO + '.';
-      return;
+    if (!distributionCache.closed) {
+      const { nodes, sinceDate } = await fetchClosedPRs(token, page => {
+        distributionShowSpinner(`Fetching closed PR data… (page ${page})`);
+      });
+      distributionCache.closed = { ...computeClosedDistribution(nodes), sinceDate };
     }
-    statusEl.style.display = 'none';
-    chartWrap.style.display = 'block';
-    document.getElementById('distribution-footnote').style.display = 'block';
-    const canvas = document.getElementById('distribution-canvas');
-    if (distributionChartInstance) distributionChartInstance.destroy();
-    // Index-aligned with the datasets array below — one source of truth
-    // for "which segment maps to which GitHub search qualifier" so the
-    // click handler can never drift out of sync with the dataset order
-    // (which is exactly the class of bug a hardcoded datasetIndex===1
-    // ternary risked as soon as a 3rd dataset got added).
-    const DATASET_QUALIFIERS = ['reviewed-by', 'review-requested', 'author'];
-    // x-axis text only — marks bots (e.g. "red-hat-konflux 🤖") so their
-    // automated PR volume reads distinctly from human team members rather
-    // than looking like an unfamiliar person. `users` itself (used for
-    // URL-building below) stays as the plain login.
-    // Full profile name when GitHub has one on file, falling back to the
-    // login otherwise (see displayNames in computeDistribution) — bots
-    // generally have no "name" set, so they naturally fall back to login
-    // + the 🤖 marker below regardless.
-    const displayLabels = users.map((u, i) => isBot[i] ? `${displayNames[i]} 🤖` : displayNames[i]);
-    distributionChartInstance = new Chart(canvas.getContext('2d'), {
-      type: 'bar',
-      data: {
-        labels: displayLabels,
-        datasets: [
-          { label: '# Reviewed', data: reviewedCounts, backgroundColor: '#60a5fa', categoryPercentage: 0.9, barPercentage: 0.95 },
-          { label: '# Pending Review', data: pendingCounts, backgroundColor: '#f59e0b', categoryPercentage: 0.9, barPercentage: 0.95 },
-          { label: '# Created', data: createdCounts, backgroundColor: '#2dd4bf', categoryPercentage: 0.9, barPercentage: 0.95 }
-        ]
-      },
-      options: {
-        responsive: true,
-        // Fixed pixel height (via the wrapper's CSS height, not an aspect
-        // ratio) so small-count segments get enough real room for their
-        // number + underline — see #distribution-chart-wrap in <style>.
-        maintainAspectRatio: false,
-        // Clicking a segment (the visible number sits right on top of its
-        // own segment, so clicking the number hits the same element)
-        // opens that person's matching GitHub PR search in a new tab —
-        // now an EXACT match, not an approximation, since each segment's
-        // count was computed from exactly one qualifier (see
-        // computeDistribution + DATASET_QUALIFIERS above).
-        onClick: (evt, elements) => {
-          if (!elements.length) return;
-          const { datasetIndex, index } = elements[0];
-          window.open(githubPrSearchUrl(DATASET_QUALIFIERS[datasetIndex], users[index], isBot[index]), '_blank');
-        },
-        onHover: (evt, elements) => {
-          evt.native.target.style.cursor = elements.length ? 'pointer' : 'default';
-        },
-        scales: {
-          x: { stacked: true, ticks: { color: '#d1d5db' }, grid: { color: '#262b36' } },
-          y: { stacked: true, beginAtZero: true, ticks: { color: '#d1d5db', precision: 0 }, grid: { color: '#262b36' }, title: { display: true, text: '# PRs', color: '#9ca3af' } }
-        },
-        plugins: {
-          legend: { labels: { color: '#d1d5db' } },
-          tooltip: { enabled: false },
-          // chartjs-plugin-datalabels (loaded in <head>) — show each
-          // segment's raw count, hide the "0" label on empty segments
-          // (e.g. someone with 3 reviews but 0 created PRs) since a
-          // zero-height segment has no room to render text anyway.
-          datalabels: {
-            color: '#0a0a0a',
-            font: { weight: 'bold' },
-            formatter: v => (v > 0 ? v : '')
-          }
-        }
-      }
-    });
+    if (tab === 'closed') renderClosedDistributionChart(distributionCache.closed);
+    else renderCycleTimeChart(distributionCache.closed);
   } catch (err) {
-    if (err && err.authError) {
-      clearGithubToken();
-      statusEl.textContent = 'Token invalid/expired — close this and click the ⚙ Settings icon to re-enter it.';
-    } else {
-      statusEl.textContent = 'Error: ' + (err && err.message ? err.message : 'fetch failed');
-    }
-    statusEl.style.color = '#ef4444';
-    console.error('[distribution] fetch failed', err);
+    distributionShowError(err);
   }
 }
 
+// Opens the modal and loads a fresh "Open" tab snapshot — an on-demand,
+// point-in-time fetch for the modal only. Deliberately not persisted to
+// the main live-fetch cache (which stays scoped to @me) and never
+// triggered by page load or auto-refresh — only this click handler (and
+// subsequent tab clicks) ever hit these team-wide queries.
+async function openDistributionModal() {
+  ensureDistributionModal();
+  const overlay = document.getElementById('distribution-overlay');
+  overlay.classList.add('open');
+  distributionCache = { open: null, closed: null };
+  overlay.querySelectorAll('.distribution-tab').forEach(b => b.classList.toggle('active', b.getAttribute('data-tab') === 'open'));
+  await loadDistributionTab('open');
+}
+
+// ==== SECTION: PAGE SHELL (header, changelog popover, top-level render) ====
 function renderChangelogPopover() {
   const entries = Object.keys(CHANGELOG).map(v =>
     `<div class="changelog-entry"><div class="changelog-version">v${esc(v)}</div><div class="changelog-desc">${esc(CHANGELOG[v])}</div></div>`
@@ -1306,6 +1871,7 @@ function pruneLocalStorage() {
   if (seenChanged) localStorage.setItem(COMMENTS_SEEN_KEY, JSON.stringify(seenMap));
 }
 
+// ==== SECTION: DOM EVENT BINDING (click/keydown handlers for the whole page) ====
 function initInteractions(root) {
   root = root || document;
 
@@ -1452,6 +2018,10 @@ function initInteractions(root) {
       markCommentsSeen(prNum, maxWhen);
       const badge = details.querySelector('.unread-badge');
       if (badge) badge.remove();
+      // Keep the header's aggregate badge in sync — this handler only
+      // touches one row's own badge above, so without this the header
+      // total would stay stale until the next full renderPRs() call.
+      refreshUnreadTotalBadge();
     });
   });
 
@@ -1539,6 +2109,7 @@ function initInteractions(root) {
 
 }
 
+// ==== SECTION: TABLE SORTING ====
 function sortTable(table, colIdx, asc) {
   // :scope > thead th restricts the match to this table's own header row.
   // Plain 'th' matches ANY descendant <th>, including header cells inside
@@ -1595,6 +2166,7 @@ function sortTable(table, colIdx, asc) {
   });
 }
 
+// ==== SECTION: BOOTSTRAP (initial render + auto-refresh on load) ====
 renderPage();
 
 // Auto-fetch live data on every load/reload so PR data and relative-age
